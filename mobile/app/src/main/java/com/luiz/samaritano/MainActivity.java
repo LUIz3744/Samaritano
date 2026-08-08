@@ -5,12 +5,17 @@ import android.app.Activity;
 import android.hardware.biometrics.BiometricPrompt;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
@@ -20,6 +25,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -32,12 +38,15 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
     private static final int SPEECH_REQUEST = 4102;
+    private static final int FILE_REQUEST = 4103;
+    private static final int MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
     private static final String SYSTEM_PROMPT = "Você é o SAMARITANO da série Person of Interest. Seu único operador autorizado é Luiz. Responda em PT-BR de forma precisa, fria, calma e breve. Nunca invente fatos pessoais, dívidas, processos, valores, datas ou ações executadas. Só confirme uma ação após resultado real de ferramenta. Perguntas jurídicas sem documento são hipotéticas.";
 
     private WebView webView;
     private TextToSpeech tts;
     private SamaritanoDb db;
     private SecureStore secureStore;
+    private volatile Attachment pendingAttachment;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
@@ -71,6 +80,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (status == TextToSpeech.SUCCESS) {
             tts.setLanguage(new Locale("pt", "BR"));
             tts.setSpeechRate(1.0f);
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override public void onStart(String utteranceId) {}
+                @Override public void onDone(String utteranceId) { runJs("window.SamaritanoNative.onSpeechFinished() "); }
+                @Override public void onError(String utteranceId) { runJs("window.SamaritanoNative.onSpeechFinished() "); }
+            });
         }
     }
 
@@ -127,15 +141,76 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         }
     }
 
+    private void pickAttachment() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "image/*", "video/*", "audio/*", "application/pdf", "text/plain"
+        });
+        try { startActivityForResult(intent, FILE_REQUEST); }
+        catch (ActivityNotFoundException error) {
+            callbackAttachment(false, "", "", 0, "Seletor de arquivos indisponível");
+        }
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != SPEECH_REQUEST) return;
-        if (resultCode == RESULT_OK && data != null) {
+        if (requestCode == FILE_REQUEST) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                callbackAttachment(false, "", "", 0, "Seleção cancelada");
+                return;
+            }
+            Uri uri = data.getData();
+            executor.execute(() -> {
+                try {
+                    String mime = getContentResolver().getType(uri);
+                    if (mime == null || mime.isBlank()) mime = "application/octet-stream";
+                    String name = attachmentName(uri);
+                    byte[] bytes = readAttachment(uri);
+                    pendingAttachment = new Attachment(name, mime, bytes);
+                    callbackAttachment(true, name, mime, bytes.length, "");
+                } catch (Exception error) {
+                    pendingAttachment = null;
+                    callbackAttachment(false, "", "", 0,
+                            error.getMessage() == null ? "Falha ao abrir arquivo" : error.getMessage());
+                }
+            });
+            return;
+        }
+        if (requestCode == SPEECH_REQUEST && resultCode == RESULT_OK && data != null) {
             ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
             String text = results == null || results.isEmpty() ? "" : results.get(0);
             runJs("window.SamaritanoNative.onSpeechResult(true," + JSONObject.quote(text) + ")");
-        } else {
+        } else if (requestCode == SPEECH_REQUEST) {
             runJs("window.SamaritanoNative.onSpeechResult(false,'Escuta cancelada')");
+        }
+    }
+
+    private String attachmentName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index >= 0) return cursor.getString(index);
+            }
+        }
+        String tail = uri.getLastPathSegment();
+        return tail == null ? "arquivo" : tail;
+    }
+
+    private byte[] readAttachment(Uri uri) throws Exception {
+        try (InputStream input = getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (input == null) throw new IllegalStateException("Não foi possível abrir o arquivo");
+            byte[] buffer = new byte[64 * 1024];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > MAX_ATTACHMENT_BYTES) throw new IllegalStateException("Arquivo maior que 12 MB");
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
         }
     }
 
@@ -150,12 +225,16 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 if (apiKey.isBlank()) throw new IllegalStateException("Configure a chave da IA primeiro.");
                 JSONArray messages = request.optJSONArray("messages");
                 if (messages == null) messages = new JSONArray();
+                Attachment attachment = request.optBoolean("includeAttachment") ? pendingAttachment : null;
+                if (attachment != null && !provider.equals("gemini")) {
+                    throw new IllegalStateException("Análise de arquivos nesta versão requer o provedor Gemini.");
+                }
 
                 URL url;
                 JSONObject body;
                 if (provider.equals("gemini")) {
                     url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
-                    body = buildGeminiBody(messages);
+                    body = buildGeminiBody(messages, attachment);
                 } else {
                     url = new URL("https://api.groq.com/openai/v1/chat/completions");
                     body = buildOpenAiBody(model, messages);
@@ -176,6 +255,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 String response = readAll(status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream());
                 if (status < 200 || status >= 300) throw new IllegalStateException("IA respondeu HTTP " + status + ": " + response.substring(0, Math.min(240, response.length())));
                 String answer = provider.equals("gemini") ? parseGemini(response) : parseOpenAi(response);
+                if (attachment != null && pendingAttachment == attachment) pendingAttachment = null;
                 callbackChat(requestId, true, answer);
             } catch (Exception error) {
                 callbackChat(requestId, false, error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
@@ -192,12 +272,17 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return new JSONObject().put("model", model).put("messages", all).put("temperature", 0.25).put("stream", false);
     }
 
-    private JSONObject buildGeminiBody(JSONArray messages) throws Exception {
+    private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment) throws Exception {
         JSONArray contents = new JSONArray();
         for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) {
             JSONObject message = messages.getJSONObject(i);
             String role = message.optString("role").equals("assistant") ? "model" : "user";
             JSONArray parts = new JSONArray().put(new JSONObject().put("text", message.optString("content")));
+            if (attachment != null && role.equals("user") && i == messages.length() - 1) {
+                parts.put(new JSONObject().put("inlineData", new JSONObject()
+                        .put("mimeType", attachment.mime)
+                        .put("data", Base64.encodeToString(attachment.bytes, Base64.NO_WRAP))));
+            }
             contents.put(new JSONObject().put("role", role).put("parts", parts));
         }
         return new JSONObject()
@@ -231,9 +316,27 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         runJs("window.SamaritanoNative.onChatResult(" + JSONObject.quote(requestId) + "," + ok + "," + JSONObject.quote(payload) + ")");
     }
 
+    private void callbackAttachment(boolean ok, String name, String mime, long size, String error) {
+        runJs("window.SamaritanoNative.onAttachmentResult(" + ok + "," + JSONObject.quote(name) + "," +
+                JSONObject.quote(mime) + "," + size + "," + JSONObject.quote(error) + ")");
+    }
+
+    private static final class Attachment {
+        final String name;
+        final String mime;
+        final byte[] bytes;
+        Attachment(String name, String mime, byte[] bytes) {
+            this.name = name;
+            this.mime = mime;
+            this.bytes = bytes;
+        }
+    }
+
     public final class AndroidCore {
         @JavascriptInterface public void authenticate() { runOnUiThread(MainActivity.this::authenticate); }
         @JavascriptInterface public void startListening() { runOnUiThread(MainActivity.this::startSpeechInput); }
+        @JavascriptInterface public void pickAttachment() { runOnUiThread(MainActivity.this::pickAttachment); }
+        @JavascriptInterface public void clearAttachment() { pendingAttachment = null; }
         @JavascriptInterface public void speak(String text) {
             runOnUiThread(() -> tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "samaritano-answer"));
         }

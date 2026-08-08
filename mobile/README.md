@@ -11,6 +11,7 @@ Aplicativo Android independente. Não precisa do servidor Node nem do notebook p
 - Groq e Gemini configuráveis;
 - leitura de respostas com Android TTS;
 - ditado pelo reconhecimento de voz do Android;
+- anexos de imagem, PDF, áudio e vídeos curtos para análise com Gemini;
 - exclusão e reabertura de conversas locais.
 
 ## Toolchain portátil desta máquina
@@ -36,6 +37,8 @@ O APK de debug será criado em `app/build/outputs/apk/debug/app-debug.apk`.
 ## Configuração inicial no celular
 
 Abra a engrenagem do Samaritano, selecione Groq ou Gemini, informe o modelo e cole a chave da API. A chave é criptografada no Keystore e nunca é devolvida à interface web interna.
+
+Análises de arquivos usam o Gemini e aceitam até 12 MB por anexo nesta versão. O arquivo é mantido apenas em memória durante o envio e não é salvo no histórico local.
 
 ## Próxima fase
 

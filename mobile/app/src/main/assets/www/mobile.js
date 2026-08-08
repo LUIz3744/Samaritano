@@ -7,6 +7,8 @@ let messages = []
 let lastAnswer = ''
 let speaking = false
 let activeRequest = null
+let activeAudioButton = null
+let pendingAttachment = null
 
 function newSessionId() {
   return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -35,12 +37,15 @@ function appendMessage(role, content, meta = '') {
   text.textContent = content
   el.appendChild(text)
   if (role === 'assistant' && content !== '…') {
+    const actions = document.createElement('div')
+    actions.className = 'message-actions'
     const audio = document.createElement('button')
     audio.className = 'message-audio-btn'
     audio.type = 'button'
-    audio.textContent = '▶ LER'
-    audio.onclick = () => speak(content)
-    el.appendChild(audio)
+    audio.textContent = '🔊 OUVIR'
+    audio.onclick = () => speaking && activeAudioButton === audio ? stopSpeaking() : speak(content, audio)
+    actions.appendChild(audio)
+    el.appendChild(actions)
   }
   if (meta) {
     const info = document.createElement('span')
@@ -62,19 +67,54 @@ function showEmptyState() {
   chat.appendChild(empty)
 }
 
-function speak(text) {
+function speak(text, button = null) {
   if (!text || !core()) return
+  stopSpeaking()
   core().speak(text)
   speaking = true
-  $('read-last').classList.add('active')
-  $('read-last').textContent = '■ PARAR VOZ'
+  activeAudioButton = button
+  if (activeAudioButton) {
+    activeAudioButton.classList.add('active')
+    activeAudioButton.textContent = '■ PARAR'
+  }
 }
 
 function stopSpeaking() {
   core()?.stopSpeaking()
   speaking = false
-  $('read-last').classList.remove('active')
-  $('read-last').textContent = '▶ LER RESPOSTA'
+  if (activeAudioButton) {
+    activeAudioButton.classList.remove('active')
+    activeAudioButton.textContent = '🔊 OUVIR'
+  }
+  activeAudioButton = null
+}
+
+function formatBytes(size) {
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function renderAttachment() {
+  const tray = $('attachment-tray')
+  if (!pendingAttachment) {
+    tray.classList.add('hidden')
+    tray.innerHTML = ''
+    return
+  }
+  tray.classList.remove('hidden')
+  tray.innerHTML = ''
+  const info = document.createElement('span')
+  info.textContent = `${pendingAttachment.name} // ${formatBytes(pendingAttachment.size)}`
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.textContent = '×'
+  remove.setAttribute('aria-label', 'Remover anexo')
+  remove.onclick = () => {
+    pendingAttachment = null
+    core()?.clearAttachment()
+    renderAttachment()
+  }
+  tray.append(info, remove)
 }
 
 function createNewChat() {
@@ -182,13 +222,18 @@ function defaultModel(provider) {
 
 async function submit() {
   const input = $('input')
-  const text = input.value.trim()
-  if (!text || activeRequest) return
+  let text = input.value.trim()
+  if ((!text && !pendingAttachment) || activeRequest) return
+  if (!text && pendingAttachment) text = pendingAttachment.mime.startsWith('video/')
+    ? 'Analise este vídeo, descreva os eventos principais e indique os momentos relevantes.'
+    : 'Analise este arquivo e apresente os pontos principais.'
+  const attachment = pendingAttachment
   input.value = ''
   stopSpeaking()
-  appendMessage('user', text)
+  const storedText = attachment ? `${text}\n\n[ANEXO: ${attachment.name} // ${attachment.mime}]` : text
+  appendMessage('user', storedText)
   messages.push({ role: 'user', content: text })
-  core()?.saveMessage(sessionId, 'user', text)
+  core()?.saveMessage(sessionId, 'user', storedText)
 
   const config = getConfig()
   if (!config.has_api_key) {
@@ -205,6 +250,7 @@ async function submit() {
     provider: config.provider,
     model: config.model || defaultModel(config.provider),
     messages: messages.slice(-20),
+    includeAttachment: Boolean(attachment),
   }
   core().sendChat(activeRequest, JSON.stringify(request))
   thinking.dataset.requestId = activeRequest
@@ -256,6 +302,10 @@ window.SamaritanoNative = {
       messages.push({ role: 'assistant', content: answer })
       core()?.saveMessage(sessionId, 'assistant', answer)
       lastAnswer = answer
+      if (pendingAttachment) {
+        pendingAttachment = null
+        renderAttachment()
+      }
     }
     activeRequest = null
     $('send').classList.remove('busy')
@@ -265,6 +315,16 @@ window.SamaritanoNative = {
     if (!ok || !text) return
     $('input').value = text
     submit()
+  },
+  onSpeechFinished() { stopSpeaking() },
+  onAttachmentResult(ok, name, mime, size, error) {
+    if (!ok) {
+      if (error !== 'Seleção cancelada') alert(error || 'Falha ao anexar arquivo')
+      return
+    }
+    pendingAttachment = { name, mime, size }
+    renderAttachment()
+    $('input').focus()
   },
 }
 
@@ -283,6 +343,7 @@ function init() {
   $('send').onclick = submit
   $('input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); submit() } }
   $('mic').onclick = () => core()?.startListening()
+  $('attach').onclick = () => core()?.pickAttachment()
   $('settings-btn').onclick = () => { renderSettings(); openModal('settings-modal') }
   $('settings-close').onclick = () => closeModal('settings-modal')
   $('settings-modal').querySelector('.modal-backdrop').onclick = () => closeModal('settings-modal')
@@ -303,17 +364,10 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.1.0'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.2.0'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')
-
-  const read = document.createElement('button')
-  read.id = 'read-last'
-  read.className = 'read-last-btn'
-  read.textContent = '▶ LER RESPOSTA'
-  read.onclick = () => speaking ? stopSpeaking() : speak(lastAnswer)
-  document.body.appendChild(read)
 
   document.querySelectorAll('[data-command]').forEach(button => {
     button.onclick = () => {
