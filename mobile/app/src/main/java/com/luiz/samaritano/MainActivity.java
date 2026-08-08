@@ -30,6 +30,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -223,6 +224,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 String model = request.optString("model", secureStore.model());
                 String apiKey = secureStore.apiKey();
                 if (apiKey.isBlank()) throw new IllegalStateException("Configure a chave da IA primeiro.");
+                String directives = secureStore.directives();
+                String systemPrompt = directives.isBlank() ? SYSTEM_PROMPT : SYSTEM_PROMPT + "\n\nDIRETRIZES PERSONALIZADAS DE LUIZ:\n" + directives;
                 JSONArray messages = request.optJSONArray("messages");
                 if (messages == null) messages = new JSONArray();
                 boolean webSearch = request.optBoolean("webSearch", false);
@@ -235,10 +238,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 JSONObject body;
                 if (provider.equals("gemini")) {
                     url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
-                    body = buildGeminiBody(messages, attachment, webSearch);
+                    body = buildGeminiBody(messages, attachment, webSearch, systemPrompt);
                 } else {
                     url = new URL("https://api.groq.com/openai/v1/chat/completions");
-                    body = buildOpenAiBody(webSearch ? "groq/compound" : model, messages);
+                    body = buildOpenAiBody(webSearch ? "groq/compound" : model, messages, systemPrompt);
                 }
 
                 connection = (HttpURLConnection) url.openConnection();
@@ -266,14 +269,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         });
     }
 
-    private JSONObject buildOpenAiBody(String model, JSONArray messages) throws Exception {
+    private JSONObject buildOpenAiBody(String model, JSONArray messages, String systemPrompt) throws Exception {
         JSONArray all = new JSONArray();
-        all.put(new JSONObject().put("role", "system").put("content", SYSTEM_PROMPT));
+        all.put(new JSONObject().put("role", "system").put("content", systemPrompt));
         for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) all.put(messages.getJSONObject(i));
         return new JSONObject().put("model", model).put("messages", all).put("temperature", 0.25).put("stream", false);
     }
 
-    private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment, boolean webSearch) throws Exception {
+    private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment, boolean webSearch, String systemPrompt) throws Exception {
         JSONArray contents = new JSONArray();
         for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) {
             JSONObject message = messages.getJSONObject(i);
@@ -287,7 +290,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             contents.put(new JSONObject().put("role", role).put("parts", parts));
         }
         JSONObject body = new JSONObject()
-                .put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", SYSTEM_PROMPT))))
+                .put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", systemPrompt))))
                 .put("contents", contents)
                 .put("generationConfig", new JSONObject().put("temperature", 0.25));
         if (webSearch) body.put("tools", new JSONArray().put(new JSONObject().put("googleSearch", new JSONObject())));
@@ -329,6 +332,71 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         }
     }
 
+    private void requestWeather(String requestId, String location, int dayOffset) {
+        executor.execute(() -> {
+            try {
+                String query = location == null || location.isBlank() ? secureStore.weatherLocation() : location.trim();
+                String geocodingUrl = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+                        URLEncoder.encode(query, "UTF-8") + "&count=1&language=pt&countryCode=BR&format=json";
+                JSONObject geocoding = new JSONObject(httpGet(geocodingUrl));
+                JSONArray results = geocoding.optJSONArray("results");
+                if (results == null || results.length() == 0) throw new IllegalStateException("Local não encontrado: " + query);
+                JSONObject place = results.getJSONObject(0);
+                double latitude = place.getDouble("latitude");
+                double longitude = place.getDouble("longitude");
+                String forecastUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + latitude +
+                        "&longitude=" + longitude +
+                        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max" +
+                        "&timezone=auto&forecast_days=3";
+                JSONObject daily = new JSONObject(httpGet(forecastUrl)).getJSONObject("daily");
+                int index = Math.max(0, Math.min(dayOffset, daily.getJSONArray("time").length() - 1));
+                String date = daily.getJSONArray("time").getString(index);
+                int code = daily.getJSONArray("weather_code").getInt(index);
+                double min = daily.getJSONArray("temperature_2m_min").getDouble(index);
+                double max = daily.getJSONArray("temperature_2m_max").getDouble(index);
+                int rain = daily.getJSONArray("precipitation_probability_max").getInt(index);
+                double wind = daily.getJSONArray("wind_speed_10m_max").getDouble(index);
+                String placeName = place.optString("name", query);
+                String state = place.optString("admin1", "");
+                String answer = "PREVISÃO CONFIRMADA // " + date + "\n" + placeName +
+                        (state.isBlank() ? "" : " — " + state) + "\n" + weatherDescription(code) +
+                        ". Mínima de " + Math.round(min) + " °C e máxima de " + Math.round(max) +
+                        " °C. Probabilidade máxima de chuva: " + rain + "%. Vento máximo: " + Math.round(wind) +
+                        " km/h.\n\nFonte: Open-Meteo — previsão atualizada por modelos meteorológicos.";
+                callbackChat(requestId, true, answer);
+            } catch (Exception error) {
+                callbackChat(requestId, false, error.getMessage() == null ? "Falha ao consultar previsão" : error.getMessage());
+            }
+        });
+    }
+
+    private String httpGet(String address) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        try {
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(20000);
+            connection.setRequestProperty("Accept", "application/json");
+            int status = connection.getResponseCode();
+            String response = readAll(status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream());
+            if (status < 200 || status >= 300) throw new IllegalStateException("Serviço meteorológico respondeu HTTP " + status);
+            return response;
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private String weatherDescription(int code) {
+        if (code == 0) return "Céu limpo";
+        if (code <= 3) return "Parcialmente nublado a encoberto";
+        if (code == 45 || code == 48) return "Neblina";
+        if (code >= 51 && code <= 67) return "Chuva ou garoa";
+        if (code >= 71 && code <= 77) return "Possibilidade de neve";
+        if (code >= 80 && code <= 82) return "Pancadas de chuva";
+        if (code >= 85 && code <= 86) return "Pancadas de neve";
+        if (code >= 95) return "Trovoadas";
+        return "Condição variável";
+    }
+
     private String readAll(InputStream input) throws Exception {
         if (input == null) return "";
         StringBuilder out = new StringBuilder();
@@ -365,6 +433,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         @JavascriptInterface public void pickAttachment() { runOnUiThread(MainActivity.this::pickAttachment); }
         @JavascriptInterface public void clearAttachment() { pendingAttachment = null; }
         @JavascriptInterface public void openWhatsApp() { runOnUiThread(MainActivity.this::openWhatsApp); }
+        @JavascriptInterface public void requestWeather(String requestId, String location, int dayOffset) { MainActivity.this.requestWeather(requestId, location, dayOffset); }
         @JavascriptInterface public void speak(String text) {
             runOnUiThread(() -> tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "samaritano-answer"));
         }
@@ -376,12 +445,18 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         @JavascriptInterface public void sendChat(String requestId, String requestJson) { MainActivity.this.sendChat(requestId, requestJson); }
         @JavascriptInterface public String getConfig() {
             try {
-                return new JSONObject().put("provider", secureStore.provider()).put("model", secureStore.model()).put("has_api_key", secureStore.hasApiKey()).toString();
+                return new JSONObject()
+                        .put("provider", secureStore.provider())
+                        .put("model", secureStore.model())
+                        .put("has_api_key", secureStore.hasApiKey())
+                        .put("weather_location", secureStore.weatherLocation())
+                        .put("directives", secureStore.directives())
+                        .toString();
             } catch (Exception error) { return "{}"; }
         }
-        @JavascriptInterface public String saveConfig(String provider, String model, String apiKey) {
+        @JavascriptInterface public String saveConfig(String provider, String model, String apiKey, String weatherLocation, String directives) {
             try {
-                secureStore.saveConfig(provider, model, apiKey);
+                secureStore.saveConfig(provider, model, apiKey, weatherLocation, directives);
                 return new JSONObject().put("ok", true).toString();
             } catch (Exception error) {
                 String message = error.getMessage() == null ? "Falha ao salvar" : error.getMessage();

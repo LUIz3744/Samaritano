@@ -15,6 +15,8 @@ Aplicativo Android independente. Não precisa do servidor Node nem do notebook p
 - busca web com fontes via Groq Compound ou Google Search do Gemini;
 - abertura segura do WhatsApp por intenção nativa do Android;
 - respostas jurídicas informativas, com limites e sem inventar dados pessoais;
+- previsão meteorológica direta e datada via Open-Meteo, sem depender da IA;
+- editor local em Markdown para objetivos, regras e limites personalizados;
 - exclusão e reabertura de conversas locais.
 
 ## Toolchain portátil desta máquina

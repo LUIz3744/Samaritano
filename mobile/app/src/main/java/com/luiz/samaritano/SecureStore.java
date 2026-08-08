@@ -24,13 +24,22 @@ final class SecureStore {
         settings = context.getSharedPreferences("mobile_settings", Context.MODE_PRIVATE);
     }
 
-    void saveConfig(String provider, String model, String apiKey) throws Exception {
-        settings.edit().putString("provider", provider).putString("model", model).apply();
+    void saveConfig(String provider, String model, String apiKey, String weatherLocation, String directives) throws Exception {
+        String safeDirectives = directives == null ? "" : directives.trim();
+        if (safeDirectives.length() > 8000) safeDirectives = safeDirectives.substring(0, 8000);
+        settings.edit()
+                .putString("provider", provider)
+                .putString("model", model)
+                .putString("weather_location", weatherLocation == null ? "" : weatherLocation.trim())
+                .putString("directives", safeDirectives)
+                .apply();
         if (apiKey != null && !apiKey.isBlank()) encryptAndSave(apiKey.trim());
     }
 
     String provider() { return settings.getString("provider", "groq"); }
     String model() { return settings.getString("model", "llama-3.1-8b-instant"); }
+    String weatherLocation() { return settings.getString("weather_location", "Soledade, Rio Grande do Sul"); }
+    String directives() { return settings.getString("directives", ""); }
     boolean hasApiKey() { return secrets.contains("payload") && secrets.contains("iv"); }
 
     String apiKey() throws Exception {

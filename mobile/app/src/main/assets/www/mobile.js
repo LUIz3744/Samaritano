@@ -201,6 +201,13 @@ function renderSettings() {
         <input id="mobile-api-key" type="password" autocomplete="off" placeholder="${config.has_api_key ? 'CHAVE JÁ PROTEGIDA — DEIXE VAZIO PARA MANTER' : 'COLE SUA CHAVE'}" />
       </label>
       <p class="provider-info">A chave é criptografada pelo Android Keystore e não aparece no histórico.</p>
+      <label>LOCAL PADRÃO DO CLIMA
+        <input id="mobile-weather-location" autocomplete="off" placeholder="Soledade, Rio Grande do Sul" />
+      </label>
+      <label>OBJETIVOS, REGRAS E LIMITES (.MD)
+        <textarea id="mobile-directives" rows="9" placeholder="# Objetivos\n- Ajudar Luiz...\n\n# Regras\n- ..."></textarea>
+      </label>
+      <p class="provider-info">Este texto é local e entra nas diretrizes do Samaritano. Limite de 8.000 caracteres.</p>
       <button id="mobile-save-config" class="provider-btn primary">SALVAR NO NÚCLEO SEGURO</button>
       <div id="mobile-config-status" class="save-bar-msg"></div>
     </div>`
@@ -208,9 +215,17 @@ function renderSettings() {
   const model = $('mobile-model')
   provider.value = config.provider || 'groq'
   model.value = config.model || defaultModel(provider.value)
+  $('mobile-weather-location').value = config.weather_location || 'Soledade, Rio Grande do Sul'
+  $('mobile-directives').value = config.directives || ''
   provider.onchange = () => { model.value = defaultModel(provider.value) }
   $('mobile-save-config').onclick = () => {
-    const result = parseJson(core().saveConfig(provider.value, model.value.trim(), $('mobile-api-key').value), {})
+    const result = parseJson(core().saveConfig(
+      provider.value,
+      model.value.trim(),
+      $('mobile-api-key').value,
+      $('mobile-weather-location').value.trim(),
+      $('mobile-directives').value,
+    ), {})
     const status = $('mobile-config-status')
     status.textContent = result.ok ? '✓ CONFIGURAÇÃO PROTEGIDA' : `✕ ${result.error || 'Falha ao salvar'}`
     status.className = `save-bar-msg ${result.ok ? 'success' : 'error'}`
@@ -228,6 +243,16 @@ function wantsWebSearch(text) {
 
 function isWhatsAppCommand(text) {
   return /^(abra|abre|abrir|inicie|inicia|ir para|me leve (?:para|ao))\s+(o\s+)?(whats(?:app)?|zap)\s*[.!?]*$/i.test(text.trim())
+}
+
+function weatherRequest(text) {
+  if (!/\b(tempo|clima|previs[aã]o)\b/i.test(text)) return null
+  const dayOffset = /\bamanh[aã]\b/i.test(text) ? 1 : 0
+  const matches = [...text.matchAll(/\b(?:em|para)\s+([^?!.]+)/gi)]
+  let location = matches.length ? matches[matches.length - 1][1].trim() : ''
+  location = location.replace(/\b(hoje|amanh[aã])\b/gi, '').replace(/^[,\s]+|[,\s]+$/g, '').trim()
+  if (/^(hoje|amanh[aã])$/i.test(location)) location = ''
+  return { location, dayOffset }
 }
 
 function setWebSearch(enabled) {
@@ -259,6 +284,17 @@ async function submit() {
   appendMessage('user', storedText)
   messages.push({ role: 'user', content: text })
   core()?.saveMessage(sessionId, 'user', storedText)
+
+  const weather = weatherRequest(text)
+  if (weather && !attachment) {
+    const thinking = appendMessage('assistant', '…')
+    activeRequest = `weather-${Date.now().toString(36)}`
+    activeWebSearch = true
+    thinking.dataset.requestId = activeRequest
+    $('send').classList.add('busy')
+    core()?.requestWeather(activeRequest, weather.location, weather.dayOffset)
+    return
+  }
 
   const config = getConfig()
   if (!config.has_api_key) {
