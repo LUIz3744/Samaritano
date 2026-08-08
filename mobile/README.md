@@ -12,6 +12,9 @@ Aplicativo Android independente. Não precisa do servidor Node nem do notebook p
 - leitura de respostas com Android TTS;
 - ditado pelo reconhecimento de voz do Android;
 - anexos de imagem, PDF, áudio e vídeos curtos para análise com Gemini;
+- busca web com fontes via Groq Compound ou Google Search do Gemini;
+- abertura segura do WhatsApp por intenção nativa do Android;
+- respostas jurídicas informativas, com limites e sem inventar dados pessoais;
 - exclusão e reabertura de conversas locais.
 
 ## Toolchain portátil desta máquina

@@ -9,6 +9,8 @@ let speaking = false
 let activeRequest = null
 let activeAudioButton = null
 let pendingAttachment = null
+let webSearchEnabled = false
+let activeWebSearch = false
 
 function newSessionId() {
   return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -220,10 +222,33 @@ function defaultModel(provider) {
   return provider === 'gemini' ? 'gemini-2.5-flash-lite' : 'llama-3.1-8b-instant'
 }
 
+function wantsWebSearch(text) {
+  return /\b(pesquis[ae]|busque|procure|na web|na internet|not[ií]cias|hoje|agora|atualizad[oa]s?|quanto custa|pre[cç]o atual)\b/i.test(text)
+}
+
+function isWhatsAppCommand(text) {
+  return /^(abra|abre|abrir|inicie|inicia|ir para|me leve (?:para|ao))\s+(o\s+)?(whats(?:app)?|zap)\s*[.!?]*$/i.test(text.trim())
+}
+
+function setWebSearch(enabled) {
+  webSearchEnabled = enabled
+  const button = $('web-search')
+  button.classList.toggle('active', enabled)
+  button.setAttribute('aria-pressed', String(enabled))
+  button.title = enabled ? 'Busca web ativada para a próxima mensagem' : 'Buscar na web'
+}
+
 async function submit() {
   const input = $('input')
   let text = input.value.trim()
   if ((!text && !pendingAttachment) || activeRequest) return
+  if (isWhatsAppCommand(text)) {
+    input.value = ''
+    appendMessage('user', text)
+    core()?.saveMessage(sessionId, 'user', text)
+    core()?.openWhatsApp()
+    return
+  }
   if (!text && pendingAttachment) text = pendingAttachment.mime.startsWith('video/')
     ? 'Analise este vídeo, descreva os eventos principais e indique os momentos relevantes.'
     : 'Analise este arquivo e apresente os pontos principais.'
@@ -246,11 +271,13 @@ async function submit() {
 
   const thinking = appendMessage('assistant', '…')
   activeRequest = `req-${Date.now().toString(36)}`
+  activeWebSearch = webSearchEnabled || wantsWebSearch(text)
   const request = {
     provider: config.provider,
     model: config.model || defaultModel(config.provider),
     messages: messages.slice(-20),
     includeAttachment: Boolean(attachment),
+    webSearch: activeWebSearch,
   }
   core().sendChat(activeRequest, JSON.stringify(request))
   thinking.dataset.requestId = activeRequest
@@ -297,7 +324,7 @@ window.SamaritanoNative = {
     const target = document.querySelector(`.msg[data-request-id="${requestId}"]`)
     if (target) target.remove()
     const answer = ok ? payload : `Falha no núcleo de IA: ${payload}`
-    appendMessage('assistant', answer, ok ? 'MOBILE CORE' : 'ERRO')
+    appendMessage('assistant', answer, ok ? (activeWebSearch ? 'WEB // MOBILE CORE' : 'MOBILE CORE') : 'ERRO')
     if (ok) {
       messages.push({ role: 'assistant', content: answer })
       core()?.saveMessage(sessionId, 'assistant', answer)
@@ -308,6 +335,8 @@ window.SamaritanoNative = {
       }
     }
     activeRequest = null
+    activeWebSearch = false
+    setWebSearch(false)
     $('send').classList.remove('busy')
     updateDashboard()
   },
@@ -325,6 +354,11 @@ window.SamaritanoNative = {
     pendingAttachment = { name, mime, size }
     renderAttachment()
     $('input').focus()
+  },
+  onExternalAppResult(ok, message) {
+    const answer = ok ? message : `Falha: ${message}`
+    appendMessage('assistant', answer, ok ? 'AÇÃO ANDROID' : 'ERRO')
+    core()?.saveMessage(sessionId, 'assistant', answer)
   },
 }
 
@@ -344,6 +378,7 @@ function init() {
   $('input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); submit() } }
   $('mic').onclick = () => core()?.startListening()
   $('attach').onclick = () => core()?.pickAttachment()
+  $('web-search').onclick = () => setWebSearch(!webSearchEnabled)
   $('settings-btn').onclick = () => { renderSettings(); openModal('settings-modal') }
   $('settings-close').onclick = () => closeModal('settings-modal')
   $('settings-modal').querySelector('.modal-backdrop').onclick = () => closeModal('settings-modal')
@@ -364,7 +399,7 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.2.0'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.3.0'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')

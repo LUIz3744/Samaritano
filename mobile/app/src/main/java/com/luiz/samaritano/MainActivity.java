@@ -40,7 +40,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private static final int SPEECH_REQUEST = 4102;
     private static final int FILE_REQUEST = 4103;
     private static final int MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
-    private static final String SYSTEM_PROMPT = "Você é o SAMARITANO da série Person of Interest. Seu único operador autorizado é Luiz. Responda em PT-BR de forma precisa, fria, calma e breve. Nunca invente fatos pessoais, dívidas, processos, valores, datas ou ações executadas. Só confirme uma ação após resultado real de ferramenta. Perguntas jurídicas sem documento são hipotéticas.";
+    private static final String SYSTEM_PROMPT = "Você é o SAMARITANO da série Person of Interest. Seu único operador autorizado é Luiz. Responda em PT-BR de forma precisa, fria, calma e breve. Nunca invente fatos pessoais, dívidas, processos, valores, datas ou ações executadas. Só confirme uma ação após resultado real de ferramenta. Você pode fornecer informação jurídica geral, explicar prescrição, decadência, prazos, procedimentos e hipóteses. Não recuse apenas porque o tema é jurídico. Avise brevemente que a aplicação concreta depende dos fatos e pode exigir advogado; não se apresente como advogado e não invente dados do caso de Luiz.";
 
     private WebView webView;
     private TextToSpeech tts;
@@ -225,6 +225,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 if (apiKey.isBlank()) throw new IllegalStateException("Configure a chave da IA primeiro.");
                 JSONArray messages = request.optJSONArray("messages");
                 if (messages == null) messages = new JSONArray();
+                boolean webSearch = request.optBoolean("webSearch", false);
                 Attachment attachment = request.optBoolean("includeAttachment") ? pendingAttachment : null;
                 if (attachment != null && !provider.equals("gemini")) {
                     throw new IllegalStateException("Análise de arquivos nesta versão requer o provedor Gemini.");
@@ -234,10 +235,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 JSONObject body;
                 if (provider.equals("gemini")) {
                     url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
-                    body = buildGeminiBody(messages, attachment);
+                    body = buildGeminiBody(messages, attachment, webSearch);
                 } else {
                     url = new URL("https://api.groq.com/openai/v1/chat/completions");
-                    body = buildOpenAiBody(model, messages);
+                    body = buildOpenAiBody(webSearch ? "groq/compound" : model, messages);
                 }
 
                 connection = (HttpURLConnection) url.openConnection();
@@ -272,7 +273,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return new JSONObject().put("model", model).put("messages", all).put("temperature", 0.25).put("stream", false);
     }
 
-    private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment) throws Exception {
+    private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment, boolean webSearch) throws Exception {
         JSONArray contents = new JSONArray();
         for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) {
             JSONObject message = messages.getJSONObject(i);
@@ -285,10 +286,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             }
             contents.put(new JSONObject().put("role", role).put("parts", parts));
         }
-        return new JSONObject()
+        JSONObject body = new JSONObject()
                 .put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", SYSTEM_PROMPT))))
                 .put("contents", contents)
                 .put("generationConfig", new JSONObject().put("temperature", 0.25));
+        if (webSearch) body.put("tools", new JSONArray().put(new JSONObject().put("googleSearch", new JSONObject())));
+        return body;
     }
 
     private String parseOpenAi(String raw) throws Exception {
@@ -296,10 +299,34 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private String parseGemini(String raw) throws Exception {
-        JSONArray parts = new JSONObject(raw).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts");
+        JSONObject candidate = new JSONObject(raw).getJSONArray("candidates").getJSONObject(0);
+        JSONArray parts = candidate.getJSONObject("content").getJSONArray("parts");
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < parts.length(); i++) out.append(parts.getJSONObject(i).optString("text"));
+        JSONObject grounding = candidate.optJSONObject("groundingMetadata");
+        JSONArray chunks = grounding == null ? null : grounding.optJSONArray("groundingChunks");
+        if (chunks != null && chunks.length() > 0) {
+            out.append("\n\nFONTES:");
+            for (int i = 0; i < Math.min(5, chunks.length()); i++) {
+                JSONObject web = chunks.optJSONObject(i) == null ? null : chunks.optJSONObject(i).optJSONObject("web");
+                if (web != null && !web.optString("uri").isBlank()) {
+                    out.append("\n- ").append(web.optString("title", "Fonte")).append(": ").append(web.optString("uri"));
+                }
+            }
+        }
         return out.toString().trim();
+    }
+
+    private void openWhatsApp() {
+        try {
+            Intent intent = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+            if (intent == null) intent = getPackageManager().getLaunchIntentForPackage("com.whatsapp.w4b");
+            if (intent == null) intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/"));
+            startActivity(intent);
+            runJs("window.SamaritanoNative.onExternalAppResult(true,'WhatsApp aberto')");
+        } catch (Exception error) {
+            runJs("window.SamaritanoNative.onExternalAppResult(false,'Não foi possível abrir o WhatsApp')");
+        }
     }
 
     private String readAll(InputStream input) throws Exception {
@@ -337,6 +364,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         @JavascriptInterface public void startListening() { runOnUiThread(MainActivity.this::startSpeechInput); }
         @JavascriptInterface public void pickAttachment() { runOnUiThread(MainActivity.this::pickAttachment); }
         @JavascriptInterface public void clearAttachment() { pendingAttachment = null; }
+        @JavascriptInterface public void openWhatsApp() { runOnUiThread(MainActivity.this::openWhatsApp); }
         @JavascriptInterface public void speak(String text) {
             runOnUiThread(() -> tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "samaritano-answer"));
         }
