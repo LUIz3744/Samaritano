@@ -2,7 +2,7 @@ package com.luiz.samaritano;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.BiometricPrompt;
+import android.hardware.biometrics.BiometricPrompt;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.os.Build;
