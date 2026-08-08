@@ -253,7 +253,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 secureStore.saveConfig(provider, model, apiKey);
                 return new JSONObject().put("ok", true).toString();
             } catch (Exception error) {
-                return "{\"ok\":false,\"error\":" + JSONObject.quote(error.getMessage() == null ? "Falha ao salvar" : error.getMessage()) + "}";
+                String message = error.getMessage() == null ? "Falha ao salvar" : error.getMessage();
+                return "{\"ok\":false,\"error\":" + JSONObject.quote(message) + "}";
             }
         }
         @JavascriptInterface public String deviceInfo() {
