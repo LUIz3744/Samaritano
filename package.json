@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node tests/smoke.js",
+    "test": "node tests/privacy.test.js",
+    "test:smoke": "node tests/smoke.js",
     "build:exe": "pkg . --targets node20-win-x64 --output dist/Samaritano.exe",
     "build:macos": "pkg . --targets node20-macos-x64 --output dist/Samaritano-mac",
     "build:linux": "pkg . --targets node20-linux-x64 --output dist/Samaritano-linux",
@@ -37,7 +38,10 @@
     "dotenv": "^17.0.0",
     "openai": "^4.80.0",
     "selfsigned": "^2.4.1",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
+  },
+  "overrides": {
+    "form-data": "^4.0.6"
   },
   "devDependencies": {
     "pkg": "^5.8.1"

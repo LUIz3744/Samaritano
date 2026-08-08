@@ -10,10 +10,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Samaritano" />
   <title>Samaritano // Luiz</title>
-  <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="/icon.svg" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body class="auth-pending">
   <section id="auth-gate" class="auth-gate" aria-live="polite">
@@ -58,7 +56,7 @@
         <button id="auth-pin-btn" class="auth-primary">AUTORIZAR</button>
       </div>
       <p class="auth-message" id="auth-message">A autenticação acontece apenas neste dispositivo e no notebook.</p>
-      <a id="auth-cert-link" class="auth-cert-link hidden" href="/api/auth/certificate" download>BAIXAR CERTIFICADO LOCAL PARA O CELULAR</a>
+      <a id="auth-cert-link" class="auth-cert-link hidden" href="#">PROTEÇÃO NATIVA DO ANDROID</a>
       <p class="auth-legal">DADO BIOMÉTRICO SENSÍVEL // CONTROLE LOCAL // LGPD</p>
     </div>
   </section>
@@ -271,10 +269,6 @@
 
   <audio id="tts-player" preload="none"></audio>
 
-  <script type="module" src="/face-auth.js"></script>
-  <script src="/install.js" defer></script>
-  <script src="/dashboard.js" defer></script>
-  <script src="/app.js" defer></script>
-  <script src="/history.js" defer></script>
+  <script src="mobile.js" defer></script>
 </body>
 </html>

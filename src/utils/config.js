@@ -56,7 +56,7 @@ const DEFAULT_CONFIG = {
     ollama: {
       apiKey: 'ollama',
       baseUrl: 'http://localhost:11434/v1',
-      models: { fast: 'llama3.2', smart: 'llama3.1:70b' },
+      models: { fast: 'llama3.2:3b', smart: 'qwen3:4b-instruct' },
     },
     custom: {
       apiKey: '',
@@ -64,9 +64,15 @@ const DEFAULT_CONFIG = {
       models: { fast: '', smart: '' },
     },
   },
-  voice: { ttsEnabled: true, voice: 'nova', speed: 1.0 },
+  voice: { ttsEnabled: false, voice: 'nova', speed: 1.0 },
   server: { port: 5070, httpsPort: 5071, httpsEnabled: true, bindLan: false },
   logging: { level: 'info' },
+  privacy: {
+    historyRetentionDays: 30,
+    maxHistoryItems: 1000,
+    redactSensitiveHistory: true,
+    allowSensitiveFacts: false,
+  },
   skills: { allowAutoCreate: true, maxUserSkills: 50 },
 }
 

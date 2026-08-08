@@ -13,12 +13,13 @@
  *   4. Retorna análise REAL (não placeholder!)
  */
 
-import { spawn, exec } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 import fs from 'fs/promises'
 import path from 'path'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 let _llmRouter = null
 export function setLLMRouter(router) { _llmRouter = router }
@@ -68,8 +69,11 @@ Write-Output "OK"
 
   // -EncodedCommand evita problemas de escape
   const encoded = Buffer.from(psScript, 'utf16le').toString('base64')
-  const { stdout, stderr } = await execAsync(
-    `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+  const windowsRoot = process.env.SystemRoot || 'C:\\Windows'
+  const powershellExe = path.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const { stdout, stderr } = await execFileAsync(
+    powershellExe,
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
     { timeout: 15000, windowsHide: true }
   )
   if (stderr && !stdout.includes('OK')) {
