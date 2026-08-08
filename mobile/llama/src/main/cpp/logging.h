@@ -9,6 +9,8 @@
 
 #pragma once
 #include <android/log.h>
+#include <mutex>
+#include <string>
 
 #ifndef LOG_TAG
 #define LOG_TAG "ai-chat"
@@ -30,6 +32,18 @@ static inline int ai_should_log(int prio) {
 #endif
 }
 
+static std::mutex ai_error_mutex;
+static std::string ai_last_error;
+
+static inline void ai_clear_last_error() {
+    std::lock_guard<std::mutex> lock(ai_error_mutex);
+    ai_last_error.clear();
+}
+
+static inline std::string ai_get_last_error() {
+    std::lock_guard<std::mutex> lock(ai_error_mutex);
+    return ai_last_error;
+}
 #if LOG_MIN_LEVEL <= ANDROID_LOG_VERBOSE
 #define LOGv(...) do { if (ai_should_log(ANDROID_LOG_VERBOSE)) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__); } while (0)
 #else
@@ -60,6 +74,11 @@ static inline void aichat_android_log_callback(enum ggml_log_level level,
                                               const char* text,
                                               void* /*user*/) {
     const int prio = android_log_prio_from_ggml(level);
+    if (level == GGML_LOG_LEVEL_ERROR && text) {
+        std::lock_guard<std::mutex> lock(ai_error_mutex);
+        ai_last_error.append(text);
+        if (ai_last_error.size() > 4096) ai_last_error.erase(0, ai_last_error.size() - 4096);
+    }
     if (!ai_should_log(prio)) return;
     __android_log_write(prio, LOG_TAG, text);
 }

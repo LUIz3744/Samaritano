@@ -3,7 +3,6 @@ package com.arm.aichat.internal
 import android.content.Context
 import android.util.Log
 import com.arm.aichat.InferenceEngine
-import com.arm.aichat.UnsupportedArchitectureException
 import com.arm.aichat.internal.InferenceEngineImpl.Companion.getInstance
 import dalvik.annotation.optimization.FastNative
 import kotlinx.coroutines.CancellationException
@@ -86,6 +85,9 @@ internal class InferenceEngineImpl private constructor(
     private external fun load(modelPath: String): Int
 
     @FastNative
+    private external fun lastError(): String
+
+    @FastNative
     private external fun prepare(): Int
 
     @FastNative
@@ -166,7 +168,7 @@ internal class InferenceEngineImpl private constructor(
                 _state.value = InferenceEngine.State.LoadingModel
                 load(pathToModel).let {
                     // TODO-han.yin: find a better way to pass other error codes
-                    if (it != 0) throw UnsupportedArchitectureException()
+                    if (it != 0) throw IOException("GGUF não carregou: ${lastError().trim()}")
                 }
                 prepare().let {
                     if (it != 0) throw IOException("Failed to prepare resources")

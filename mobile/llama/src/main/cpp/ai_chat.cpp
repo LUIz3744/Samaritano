@@ -60,6 +60,10 @@ extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
+    // App-specific external storage is backed by Android's FUSE layer. Reading
+    // normally is more compatible than mmap across Xiaomi/HyperOS versions.
+    model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+    ai_clear_last_error();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
@@ -71,6 +75,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
     }
     g_model = model;
     return 0;
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_lastError(JNIEnv *env, jobject) {
+    const std::string error = ai_get_last_error();
+    return env->NewStringUTF(error.empty() ? "Falha nativa sem detalhes" : error.c_str());
 }
 
 static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
