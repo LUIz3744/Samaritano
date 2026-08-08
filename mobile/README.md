@@ -17,6 +17,9 @@ Aplicativo Android independente. Não precisa do servidor Node nem do notebook p
 - respostas jurídicas informativas, com limites e sem inventar dados pessoais;
 - previsão meteorológica direta e datada via Open-Meteo, sem depender da IA;
 - editor local em Markdown para objetivos, regras e limites personalizados;
+- Qwen3 1.7B Q4_K_M via llama.cpp oficial para conversa totalmente offline;
+- download separado do modelo com progresso e verificação SHA-256;
+- fallback automático para o modelo local quando a rede estiver indisponível;
 - exclusão e reabertura de conversas locais.
 
 ## Toolchain portátil desta máquina

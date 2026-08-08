@@ -192,6 +192,7 @@ function renderSettings() {
         <select id="mobile-provider">
           <option value="groq">GROQ</option>
           <option value="gemini">GOOGLE GEMINI</option>
+          <option value="offline">OFFLINE // QWEN3 LOCAL</option>
         </select>
       </label>
       <label>MODELO
@@ -208,6 +209,13 @@ function renderSettings() {
         <textarea id="mobile-directives" rows="9" placeholder="# Objetivos\n- Ajudar Luiz...\n\n# Regras\n- ..."></textarea>
       </label>
       <p class="provider-info">Este texto é local e entra nas diretrizes do Samaritano. Limite de 8.000 caracteres.</p>
+      <div class="offline-model-card">
+        <strong>NÚCLEO OFFLINE // QWEN3 1.7B</strong>
+        <span id="offline-model-status">VERIFICANDO…</span>
+        <div class="offline-progress"><i id="offline-progress-bar"></i></div>
+        <button id="offline-download" class="provider-btn">BAIXAR MODELO OFFLINE // 1,28 GB</button>
+        <small>Baixe uma vez no Wi-Fi. Depois o chat funciona sem internet.</small>
+      </div>
       <button id="mobile-save-config" class="provider-btn primary">SALVAR NO NÚCLEO SEGURO</button>
       <div id="mobile-config-status" class="save-bar-msg"></div>
     </div>`
@@ -218,6 +226,12 @@ function renderSettings() {
   $('mobile-weather-location').value = config.weather_location || 'Soledade, Rio Grande do Sul'
   $('mobile-directives').value = config.directives || ''
   provider.onchange = () => { model.value = defaultModel(provider.value) }
+  $('offline-download').onclick = () => {
+    const result = parseJson(core()?.startOfflineDownload(), {})
+    if (!result.ok) alert(result.error || 'Falha ao iniciar download')
+    updateOfflineStatus()
+  }
+  updateOfflineStatus()
   $('mobile-save-config').onclick = () => {
     const result = parseJson(core().saveConfig(
       provider.value,
@@ -234,7 +248,34 @@ function renderSettings() {
 }
 
 function defaultModel(provider) {
+  if (provider === 'offline') return 'Qwen3-1.7B-Q4_K_M'
   return provider === 'gemini' ? 'gemini-2.5-flash-lite' : 'llama-3.1-8b-instant'
+}
+
+function updateOfflineStatus() {
+  const label = $('offline-model-status')
+  if (!label || !core()) return
+  const status = parseJson(core().getOfflineStatus(), {})
+  const bar = $('offline-progress-bar')
+  const button = $('offline-download')
+  let percent = 0
+  if (status.total > 0) percent = Math.min(100, Math.round((status.downloaded / status.total) * 100))
+  if (bar) bar.style.width = `${percent}%`
+  if (status.ready) {
+    label.textContent = '✓ INSTALADO E VERIFICADO // PRONTO'
+    button.disabled = true
+    button.textContent = 'MODELO OFFLINE INSTALADO'
+  } else if (status.verifying) {
+    label.textContent = 'VERIFICANDO SHA-256…'
+    button.disabled = true
+  } else if (status.downloading) {
+    label.textContent = `BAIXANDO // ${percent}% // ${formatBytes(status.downloaded || 0)}`
+    button.disabled = true
+  } else {
+    label.textContent = status.error ? `✕ ${status.error}` : 'NÃO INSTALADO'
+    button.disabled = false
+  }
+  updateDashboard()
 }
 
 function wantsWebSearch(text) {
@@ -297,7 +338,7 @@ async function submit() {
   }
 
   const config = getConfig()
-  if (!config.has_api_key) {
+  if (!config.has_api_key && !config.offline_ready) {
     const warning = 'Configure gratuitamente uma chave Groq ou Gemini nas configurações.'
     appendMessage('assistant', warning)
     openModal('settings-modal')
@@ -396,6 +437,7 @@ window.SamaritanoNative = {
     appendMessage('assistant', answer, ok ? 'AÇÃO ANDROID' : 'ERRO')
     core()?.saveMessage(sessionId, 'assistant', answer)
   },
+  onOfflineStatusChanged() { updateOfflineStatus() },
 }
 
 function init() {
@@ -435,7 +477,7 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.3.1'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.4.0'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')
@@ -447,6 +489,7 @@ function init() {
     }
   })
   setInterval(() => { $('dashboard-clock').textContent = new Date().toLocaleTimeString('pt-BR') }, 1000)
+  setInterval(updateOfflineStatus, 3000)
   showEmptyState()
   updateDashboard()
 }

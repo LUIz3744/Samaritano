@@ -1402,6 +1402,11 @@ body[data-panel-density="comfortable"] .dash-actions button { font-size: 8px; }
 .mobile-settings label { display: grid; gap: 6px; color: #777; font: 8px/1.3 var(--font-mono); letter-spacing: .12em; }
 .mobile-settings input, .mobile-settings select, .mobile-settings textarea { width: 100%; min-height: 43px; padding: 0 12px; border: 1px solid #333; border-left: 2px solid var(--accent); border-radius: 0; color: #ddd; background: #080808; font: 12px/1.45 var(--font-mono); }
 .mobile-settings textarea { min-height: 170px; padding: 12px; resize: vertical; }
+.offline-model-card { display: grid; gap: 9px; padding: 12px; border: 1px solid #333; border-left: 2px solid var(--accent); background: #080808; }
+.offline-model-card strong { color: #ddd; font: 10px/1.3 var(--font-mono); letter-spacing: .1em; }
+.offline-model-card span, .offline-model-card small { color: #888; font: 8px/1.4 var(--font-mono); letter-spacing: .07em; }
+.offline-progress { height: 3px; overflow: hidden; background: #242424; }
+.offline-progress i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .25s; }
 .btn-send.busy { opacity: .45; pointer-events: none; }
 
 .history-modal-content { width: min(620px, 94vw); }

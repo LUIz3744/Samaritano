@@ -4,14 +4,20 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.hardware.biometrics.BiometricPrompt;
 import android.content.ActivityNotFoundException;
+import android.app.DownloadManager;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
+import android.os.Environment;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.speech.RecognizerIntent;
@@ -30,10 +36,13 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -47,13 +56,19 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
     private static final int MAX_DIRECT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
     private static final int MAX_CONTEXT_CHARS = 24000;
+    private static final String OFFLINE_MODEL_NAME = "Qwen3-1.7B-Q4_K_M.gguf";
+    private static final String OFFLINE_MODEL_URL = "https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true";
+    private static final String OFFLINE_MODEL_SHA256 = "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5";
     private static final String SYSTEM_PROMPT = "Você é o SAMARITANO da série Person of Interest. Seu único operador autorizado é Luiz. Responda em PT-BR de forma precisa, fria, calma e breve. Nunca invente fatos pessoais, dívidas, processos, valores, datas ou ações executadas. Só confirme uma ação após resultado real de ferramenta. Você pode fornecer informação jurídica geral, explicar prescrição, decadência, prazos, procedimentos e hipóteses. Não recuse apenas porque o tema é jurídico. Avise brevemente que a aplicação concreta depende dos fatos e pode exigir advogado; não se apresente como advogado e não invente dados do caso de Luiz.";
 
     private WebView webView;
     private TextToSpeech tts;
     private SamaritanoDb db;
     private SecureStore secureStore;
+    private OfflineLlm offlineLlm;
+    private SharedPreferences offlinePrefs;
     private volatile Attachment pendingAttachment;
+    private volatile boolean modelVerificationRunning;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
@@ -61,6 +76,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         super.onCreate(savedInstanceState);
         db = new SamaritanoDb(this);
         secureStore = new SecureStore(this);
+        offlinePrefs = getSharedPreferences("offline_model", MODE_PRIVATE);
+        offlineLlm = new OfflineLlm(this);
         tts = new TextToSpeech(this, this);
 
         webView = new WebView(this);
@@ -97,6 +114,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     @Override protected void onDestroy() {
         if (tts != null) { tts.stop(); tts.shutdown(); }
+        if (offlineLlm != null) offlineLlm.shutdown();
         executor.shutdownNow();
         db.close();
         super.onDestroy();
@@ -261,14 +279,19 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 JSONObject request = new JSONObject(requestJson);
                 String provider = request.optString("provider", secureStore.provider());
                 String model = request.optString("model", secureStore.model());
-                String apiKey = secureStore.apiKey();
-                if (apiKey.isBlank()) throw new IllegalStateException("Configure a chave da IA primeiro.");
                 String directives = secureStore.directives();
                 String systemPrompt = directives.isBlank() ? SYSTEM_PROMPT : SYSTEM_PROMPT + "\n\nDIRETRIZES PERSONALIZADAS DE LUIZ:\n" + directives;
                 JSONArray messages = request.optJSONArray("messages");
                 if (messages == null) messages = new JSONArray();
                 boolean webSearch = request.optBoolean("webSearch", false);
                 Attachment attachment = request.optBoolean("includeAttachment") ? pendingAttachment : null;
+                if (provider.equals("offline") || !isNetworkAvailable()) {
+                    if (attachment != null) throw new IllegalStateException("O modelo textual offline ainda não analisa anexos.");
+                    sendOfflineChat(requestId, messages, systemPrompt);
+                    return;
+                }
+                String apiKey = secureStore.apiKey();
+                if (apiKey.isBlank()) throw new IllegalStateException("Configure a chave da IA primeiro.");
                 if (attachment != null && !provider.equals("gemini")) {
                     throw new IllegalStateException("Análise de arquivos nesta versão requer o provedor Gemini.");
                 }
@@ -458,6 +481,114 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return "Condição variável";
     }
 
+    private boolean isNetworkAvailable() {
+        ConnectivityManager manager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null || manager.getActiveNetwork() == null) return false;
+        NetworkCapabilities capabilities = manager.getNetworkCapabilities(manager.getActiveNetwork());
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
+
+    private File offlineModelFile() {
+        File base = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        return new File(new File(base == null ? getFilesDir() : base, "models"), OFFLINE_MODEL_NAME);
+    }
+
+    private boolean offlineModelReady() {
+        File file = offlineModelFile();
+        return file.isFile() && file.length() > 1_000_000_000L && offlinePrefs.getBoolean("verified", false);
+    }
+
+    private void sendOfflineChat(String requestId, JSONArray messages, String systemPrompt) throws Exception {
+        if (!offlineModelReady()) {
+            throw new IllegalStateException("Sem internet e o modelo offline ainda não está instalado. Abra ⚙ e toque em BAIXAR MODELO OFFLINE.");
+        }
+        JSONArray compact = compactMessages(messages);
+        StringBuilder prompt = new StringBuilder();
+        for (int i = 0; i < compact.length(); i++) {
+            JSONObject message = compact.getJSONObject(i);
+            prompt.append(message.optString("role").equals("assistant") ? "SAMARITANO: " : "LUIZ: ")
+                    .append(message.optString("content")).append('\n');
+        }
+        offlineLlm.chat(offlineModelFile().getAbsolutePath(), systemPrompt, prompt.toString(),
+                (ok, text) -> callbackChat(requestId, ok, ok ? text : "Falha no modelo offline: " + text));
+    }
+
+    private String startOfflineDownload() {
+        try {
+            if (offlineModelReady()) return new JSONObject().put("ok", true).put("already", true).toString();
+            File target = offlineModelFile();
+            File parent = target.getParentFile();
+            if (parent != null) parent.mkdirs();
+            offlinePrefs.edit().putBoolean("verified", false).remove("error").apply();
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(OFFLINE_MODEL_URL))
+                    .setTitle("Samaritano Offline")
+                    .setDescription("Qwen3 1.7B — 1,28 GB")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setAllowedOverMetered(false)
+                    .setAllowedOverRoaming(false)
+                    .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "models/" + OFFLINE_MODEL_NAME);
+            DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            long id = manager.enqueue(request);
+            offlinePrefs.edit().putLong("download_id", id).apply();
+            return new JSONObject().put("ok", true).put("download_id", id).toString();
+        } catch (Exception error) {
+            return "{\"ok\":false,\"error\":" + JSONObject.quote(error.getMessage()) + "}";
+        }
+    }
+
+    private String offlineStatus() {
+        try {
+            File file = offlineModelFile();
+            JSONObject status = new JSONObject()
+                    .put("ready", offlineModelReady())
+                    .put("verifying", modelVerificationRunning)
+                    .put("size", file.isFile() ? file.length() : 0)
+                    .put("model", "Qwen3 1.7B Q4_K_M")
+                    .put("error", offlinePrefs.getString("error", ""));
+            long id = offlinePrefs.getLong("download_id", -1);
+            if (id > 0) {
+                DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                try (Cursor cursor = manager.query(new DownloadManager.Query().setFilterById(id))) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int state = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                        long downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        long total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                        status.put("downloading", state == DownloadManager.STATUS_PENDING || state == DownloadManager.STATUS_RUNNING || state == DownloadManager.STATUS_PAUSED)
+                                .put("downloaded", downloaded).put("total", total);
+                        if (state == DownloadManager.STATUS_SUCCESSFUL && !offlinePrefs.getBoolean("verified", false)) verifyOfflineModel();
+                        if (state == DownloadManager.STATUS_FAILED) status.put("error", "Download do modelo falhou");
+                    }
+                }
+            }
+            return status.toString();
+        } catch (Exception error) {
+            return "{\"ready\":false,\"error\":" + JSONObject.quote(error.getMessage()) + "}";
+        }
+    }
+
+    private synchronized void verifyOfflineModel() {
+        if (modelVerificationRunning) return;
+        modelVerificationRunning = true;
+        executor.execute(() -> {
+            try (InputStream input = new FileInputStream(offlineModelFile())) {
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                byte[] buffer = new byte[1024 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read);
+                StringBuilder hash = new StringBuilder();
+                for (byte value : digest.digest()) hash.append(String.format(Locale.ROOT, "%02x", value));
+                boolean valid = hash.toString().equals(OFFLINE_MODEL_SHA256);
+                offlinePrefs.edit().putBoolean("verified", valid)
+                        .putString("error", valid ? "" : "Modelo baixado falhou na verificação SHA-256").apply();
+            } catch (Exception error) {
+                offlinePrefs.edit().putBoolean("verified", false).putString("error", error.getMessage()).apply();
+            } finally {
+                modelVerificationRunning = false;
+                runJs("window.SamaritanoNative.onOfflineStatusChanged()");
+            }
+        });
+    }
+
     private String readAll(InputStream input) throws Exception {
         if (input == null) return "";
         StringBuilder out = new StringBuilder();
@@ -495,6 +626,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         @JavascriptInterface public void clearAttachment() { pendingAttachment = null; }
         @JavascriptInterface public void openWhatsApp() { runOnUiThread(MainActivity.this::openWhatsApp); }
         @JavascriptInterface public void requestWeather(String requestId, String location, int dayOffset) { MainActivity.this.requestWeather(requestId, location, dayOffset); }
+        @JavascriptInterface public String startOfflineDownload() { return MainActivity.this.startOfflineDownload(); }
+        @JavascriptInterface public String getOfflineStatus() { return MainActivity.this.offlineStatus(); }
         @JavascriptInterface public void speak(String text) {
             runOnUiThread(() -> tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "samaritano-answer"));
         }
@@ -510,6 +643,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                         .put("provider", secureStore.provider())
                         .put("model", secureStore.model())
                         .put("has_api_key", secureStore.hasApiKey())
+                        .put("offline_ready", offlineModelReady())
                         .put("weather_location", secureStore.weatherLocation())
                         .put("directives", secureStore.directives())
                         .toString();

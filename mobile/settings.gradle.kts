@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "SamaritanoMobile"
 include(":app")
+include(":llama")
