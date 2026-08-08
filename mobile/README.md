@@ -43,7 +43,7 @@ O APK de debug será criado em `app/build/outputs/apk/debug/app-debug.apk`.
 
 Abra a engrenagem do Samaritano, selecione Groq ou Gemini, informe o modelo e cole a chave da API. A chave é criptografada no Keystore e nunca é devolvida à interface web interna.
 
-Análises de arquivos usam o Gemini e aceitam até 12 MB por anexo nesta versão. O arquivo é mantido apenas em memória durante o envio e não é salvo no histórico local.
+Análises de arquivos usam o Gemini. Fotos de até 16 MB são reduzidas automaticamente para no máximo 1600 px; outros arquivos aceitam até 5 MB. O arquivo é mantido apenas em memória durante o envio e não é salvo no histórico local.
 
 ## Próxima fase
 

@@ -6,6 +6,8 @@ import android.hardware.biometrics.BiometricPrompt;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -33,6 +35,8 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,7 +44,9 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
     private static final int SPEECH_REQUEST = 4102;
     private static final int FILE_REQUEST = 4103;
-    private static final int MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+    private static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+    private static final int MAX_DIRECT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+    private static final int MAX_CONTEXT_CHARS = 24000;
     private static final String SYSTEM_PROMPT = "Você é o SAMARITANO da série Person of Interest. Seu único operador autorizado é Luiz. Responda em PT-BR de forma precisa, fria, calma e breve. Nunca invente fatos pessoais, dívidas, processos, valores, datas ou ações executadas. Só confirme uma ação após resultado real de ferramenta. Você pode fornecer informação jurídica geral, explicar prescrição, decadência, prazos, procedimentos e hipóteses. Não recuse apenas porque o tema é jurídico. Avise brevemente que a aplicação concreta depende dos fatos e pode exigir advogado; não se apresente como advogado e não invente dados do caso de Luiz.";
 
     private WebView webView;
@@ -168,9 +174,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                     String mime = getContentResolver().getType(uri);
                     if (mime == null || mime.isBlank()) mime = "application/octet-stream";
                     String name = attachmentName(uri);
-                    byte[] bytes = readAttachment(uri);
-                    pendingAttachment = new Attachment(name, mime, bytes);
-                    callbackAttachment(true, name, mime, bytes.length, "");
+                    Attachment attachment = prepareAttachment(uri, name, mime);
+                    pendingAttachment = attachment;
+                    callbackAttachment(true, attachment.name, attachment.mime, attachment.bytes.length, "");
                 } catch (Exception error) {
                     pendingAttachment = null;
                     callbackAttachment(false, "", "", 0,
@@ -199,6 +205,39 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return tail == null ? "arquivo" : tail;
     }
 
+    private Attachment prepareAttachment(Uri uri, String name, String mime) throws Exception {
+        byte[] original = readAttachment(uri);
+        if (mime.startsWith("image/")) {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(original, 0, original.length, bounds);
+            int sample = 1;
+            while (bounds.outWidth / sample > 2400 || bounds.outHeight / sample > 2400) sample *= 2;
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            Bitmap decoded = BitmapFactory.decodeByteArray(original, 0, original.length, options);
+            if (decoded == null) throw new IllegalStateException("Imagem inválida ou incompatível");
+            int largest = Math.max(decoded.getWidth(), decoded.getHeight());
+            Bitmap outputBitmap = decoded;
+            if (largest > 1600) {
+                float ratio = 1600f / largest;
+                outputBitmap = Bitmap.createScaledBitmap(decoded,
+                        Math.max(1, Math.round(decoded.getWidth() * ratio)),
+                        Math.max(1, Math.round(decoded.getHeight() * ratio)), true);
+            }
+            ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+            outputBitmap.compress(Bitmap.CompressFormat.JPEG, 82, compressed);
+            if (outputBitmap != decoded) outputBitmap.recycle();
+            decoded.recycle();
+            String baseName = name == null ? "imagem" : name.replaceFirst("\\.[^.]+$", "");
+            return new Attachment(baseName + ".jpg", "image/jpeg", compressed.toByteArray());
+        }
+        if (original.length > MAX_DIRECT_ATTACHMENT_BYTES) {
+            throw new IllegalStateException("Arquivo maior que 5 MB. Imagens são compactadas automaticamente; reduza este documento antes de enviar.");
+        }
+        return new Attachment(name, mime, original);
+    }
+
     private byte[] readAttachment(Uri uri) throws Exception {
         try (InputStream input = getContentResolver().openInputStream(uri);
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
@@ -208,7 +247,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             int read;
             while ((read = input.read(buffer)) != -1) {
                 total += read;
-                if (total > MAX_ATTACHMENT_BYTES) throw new IllegalStateException("Arquivo maior que 12 MB");
+                if (total > MAX_SOURCE_BYTES) throw new IllegalStateException("Arquivo original maior que 16 MB");
                 output.write(buffer, 0, read);
             }
             return output.toByteArray();
@@ -257,6 +296,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
                 int status = connection.getResponseCode();
                 String response = readAll(status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream());
+                if (status == 413) throw new IllegalStateException("Arquivo ou conversa grande demais para o provedor. A imagem já foi compactada; tente uma conversa nova ou um documento menor.");
                 if (status < 200 || status >= 300) throw new IllegalStateException("IA respondeu HTTP " + status + ": " + response.substring(0, Math.min(240, response.length())));
                 String answer = provider.equals("gemini") ? parseGemini(response) : parseOpenAi(response);
                 if (attachment != null && pendingAttachment == attachment) pendingAttachment = null;
@@ -272,17 +312,19 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private JSONObject buildOpenAiBody(String model, JSONArray messages, String systemPrompt) throws Exception {
         JSONArray all = new JSONArray();
         all.put(new JSONObject().put("role", "system").put("content", systemPrompt));
-        for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) all.put(messages.getJSONObject(i));
+        JSONArray compact = compactMessages(messages);
+        for (int i = 0; i < compact.length(); i++) all.put(compact.getJSONObject(i));
         return new JSONObject().put("model", model).put("messages", all).put("temperature", 0.25).put("stream", false);
     }
 
     private JSONObject buildGeminiBody(JSONArray messages, Attachment attachment, boolean webSearch, String systemPrompt) throws Exception {
+        JSONArray compact = compactMessages(messages);
         JSONArray contents = new JSONArray();
-        for (int i = Math.max(0, messages.length() - 20); i < messages.length(); i++) {
-            JSONObject message = messages.getJSONObject(i);
+        for (int i = 0; i < compact.length(); i++) {
+            JSONObject message = compact.getJSONObject(i);
             String role = message.optString("role").equals("assistant") ? "model" : "user";
             JSONArray parts = new JSONArray().put(new JSONObject().put("text", message.optString("content")));
-            if (attachment != null && role.equals("user") && i == messages.length() - 1) {
+            if (attachment != null && role.equals("user") && i == compact.length() - 1) {
                 parts.put(new JSONObject().put("inlineData", new JSONObject()
                         .put("mimeType", attachment.mime)
                         .put("data", Base64.encodeToString(attachment.bytes, Base64.NO_WRAP))));
@@ -295,6 +337,25 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 .put("generationConfig", new JSONObject().put("temperature", 0.25));
         if (webSearch) body.put("tools", new JSONArray().put(new JSONObject().put("googleSearch", new JSONObject())));
         return body;
+    }
+
+    private JSONArray compactMessages(JSONArray messages) throws Exception {
+        List<JSONObject> selected = new ArrayList<>();
+        int used = 0;
+        for (int i = messages.length() - 1; i >= 0 && selected.size() < 12 && used < MAX_CONTEXT_CHARS; i--) {
+            JSONObject source = messages.getJSONObject(i);
+            String content = source.optString("content");
+            int perMessage = i == messages.length() - 1 ? 8000 : 4000;
+            int available = Math.min(perMessage, MAX_CONTEXT_CHARS - used);
+            if (available <= 0) break;
+            if (content.length() > available) content = content.substring(0, available) + "\n[conteúdo anterior resumido pelo limite local]";
+            selected.add(new JSONObject().put("role", source.optString("role", "user")).put("content", content));
+            used += content.length();
+        }
+        Collections.reverse(selected);
+        JSONArray compact = new JSONArray();
+        for (JSONObject message : selected) compact.put(message);
+        return compact;
     }
 
     private String parseOpenAi(String raw) throws Exception {
