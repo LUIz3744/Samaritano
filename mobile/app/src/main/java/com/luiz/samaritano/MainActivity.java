@@ -87,6 +87,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         webView.getSettings().setAllowContentAccess(false);
         webView.getSettings().setAllowUniversalAccessFromFileURLs(false);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
+        webView.getSettings().setSupportZoom(false);
+        webView.getSettings().setBuiltInZoomControls(false);
+        webView.getSettings().setDisplayZoomControls(false);
+        webView.getSettings().setLoadWithOverviewMode(false);
+        webView.getSettings().setUseWideViewPort(false);
+        webView.getSettings().setTextZoom(100);
+        webView.setHorizontalScrollBarEnabled(false);
+        webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         webView.addJavascriptInterface(new AndroidCore(), "SamaritanoAndroid");
         webView.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {

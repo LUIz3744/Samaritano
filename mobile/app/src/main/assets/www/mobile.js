@@ -441,6 +441,14 @@ window.SamaritanoNative = {
 }
 
 function init() {
+  const resetHorizontalPosition = () => {
+    window.scrollTo(0, window.scrollY)
+    document.documentElement.scrollLeft = 0
+    document.body.scrollLeft = 0
+  }
+  resetHorizontalPosition()
+  window.addEventListener('resize', resetHorizontalPosition)
+  window.addEventListener('orientationchange', () => setTimeout(resetHorizontalPosition, 50))
   localStorage.setItem('samaritano:mobile-session', sessionId)
   $('auth-subtitle').textContent = 'IDENTIDADE NATIVA // OPERADOR LUIZ'
   $('auth-camera-placeholder').textContent = 'BIOMETRIA PROTEGIDA PELO ANDROID'
@@ -477,7 +485,7 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.4.2'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.4.3'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')
