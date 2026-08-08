@@ -11,8 +11,8 @@ android {
         applicationId = "com.luiz.samaritano"
         minSdk = 28
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.4.1"
     }
 
     buildTypes {
@@ -25,6 +25,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    packaging {
+        jniLibs.useLegacyPackaging = true
     }
 }
 

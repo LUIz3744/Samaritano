@@ -477,7 +477,7 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.4.0'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.4.1'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')
