@@ -291,11 +291,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 String systemPrompt = directives.isBlank() ? SYSTEM_PROMPT : SYSTEM_PROMPT + "\n\nDIRETRIZES PERSONALIZADAS DE LUIZ:\n" + directives;
                 JSONArray messages = request.optJSONArray("messages");
                 if (messages == null) messages = new JSONArray();
+                String conversationId = request.optString("sessionId", "mobile-default");
                 boolean webSearch = request.optBoolean("webSearch", false);
                 Attachment attachment = request.optBoolean("includeAttachment") ? pendingAttachment : null;
                 if (provider.equals("offline") || !isNetworkAvailable()) {
                     if (attachment != null) throw new IllegalStateException("O modelo textual offline ainda não analisa anexos.");
-                    sendOfflineChat(requestId, messages, systemPrompt);
+                    sendOfflineChat(requestId, conversationId, messages, systemPrompt);
                     return;
                 }
                 String apiKey = secureStore.apiKey();
@@ -506,18 +507,21 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return file.isFile() && file.length() > 1_000_000_000L && offlinePrefs.getBoolean("verified", false);
     }
 
-    private void sendOfflineChat(String requestId, JSONArray messages, String systemPrompt) throws Exception {
+    private void sendOfflineChat(String requestId, String conversationId, JSONArray messages, String systemPrompt) throws Exception {
         if (!offlineModelReady()) {
             throw new IllegalStateException("Sem internet e o modelo offline ainda não está instalado. Abra ⚙ e toque em BAIXAR MODELO OFFLINE.");
         }
         JSONArray compact = compactMessages(messages);
-        StringBuilder prompt = new StringBuilder();
-        for (int i = 0; i < compact.length(); i++) {
+        String prompt = "";
+        for (int i = compact.length() - 1; i >= 0; i--) {
             JSONObject message = compact.getJSONObject(i);
-            prompt.append(message.optString("role").equals("assistant") ? "SAMARITANO: " : "LUIZ: ")
-                    .append(message.optString("content")).append('\n');
+            if (message.optString("role").equals("user")) {
+                prompt = message.optString("content").trim();
+                break;
+            }
         }
-        offlineLlm.chat(offlineModelFile().getAbsolutePath(), systemPrompt, prompt.toString(),
+        if (prompt.isBlank()) throw new IllegalStateException("Pergunta vazia.");
+        offlineLlm.chat(offlineModelFile().getAbsolutePath(), conversationId, systemPrompt, prompt,
                 (ok, text) -> callbackChat(requestId, ok, ok ? text : "Falha no modelo offline: " + text));
     }
 

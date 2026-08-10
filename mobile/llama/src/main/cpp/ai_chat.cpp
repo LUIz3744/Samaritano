@@ -118,6 +118,8 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
 static common_sampler *new_sampler(float temp) {
     common_params_sampling sparams;
     sparams.temp = temp;
+    sparams.penalty_repeat = 1.10f;
+    sparams.penalty_last_n = 128;
     return common_sampler_init(g_model, sparams);
 }
 

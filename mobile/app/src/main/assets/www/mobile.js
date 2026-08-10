@@ -70,6 +70,7 @@ function showEmptyState() {
 }
 
 function speak(text, button = null) {
+  text = cleanAssistantText(text)
   if (!text || !core()) return
   stopSpeaking()
   core().speak(text)
@@ -79,6 +80,13 @@ function speak(text, button = null) {
     activeAudioButton.classList.add('active')
     activeAudioButton.textContent = '■ PARAR'
   }
+}
+
+function cleanAssistantText(text) {
+  return String(text || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/?think>/gi, '')
+    .trim()
 }
 
 function stopSpeaking() {
@@ -350,6 +358,7 @@ async function submit() {
   activeRequest = `req-${Date.now().toString(36)}`
   activeWebSearch = webSearchEnabled || wantsWebSearch(text)
   const request = {
+    sessionId,
     provider: config.provider,
     model: config.model || defaultModel(config.provider),
     messages: messages.slice(-20),
@@ -400,7 +409,7 @@ window.SamaritanoNative = {
     if (requestId !== activeRequest) return
     const target = document.querySelector(`.msg[data-request-id="${requestId}"]`)
     if (target) target.remove()
-    const answer = ok ? payload : `Falha no núcleo de IA: ${payload}`
+    const answer = ok ? cleanAssistantText(payload) : `Falha no núcleo de IA: ${payload}`
     appendMessage('assistant', answer, ok ? (activeWebSearch ? 'WEB // MOBILE CORE' : 'MOBILE CORE') : 'ERRO')
     if (ok) {
       messages.push({ role: 'assistant', content: answer })
@@ -485,7 +494,7 @@ function init() {
   $('panel-modal').querySelector('.modal-backdrop').onclick = () => closeModal('panel-modal')
   $('install-app').textContent = 'APK INSTALADO'
   $('install-app').disabled = true
-  $('install-status').textContent = 'Samaritano Mobile Core 0.4.3'
+  $('install-status').textContent = 'Samaritano Mobile Core 0.4.4'
   $('realtime-btn').onclick = () => core()?.startListening()
   $('status-text').textContent = 'MOBILE'
   $('status-dot').classList.add('ok')

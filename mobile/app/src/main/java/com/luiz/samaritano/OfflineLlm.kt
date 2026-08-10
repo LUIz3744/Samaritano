@@ -17,11 +17,12 @@ class OfflineLlm(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val engine = AiChat.getInferenceEngine(context.applicationContext)
     @Volatile private var loadedPath: String? = null
+    @Volatile private var loadedConversationId: String? = null
 
-    fun chat(modelPath: String, systemPrompt: String, prompt: String, callback: Callback) {
+    fun chat(modelPath: String, conversationId: String, systemPrompt: String, prompt: String, callback: Callback) {
         scope.launch {
             try {
-                if (loadedPath != modelPath) {
+                if (loadedPath != modelPath || loadedConversationId != conversationId) {
                     val initial = engine.state.first {
                         it is InferenceEngine.State.Initialized ||
                             it is InferenceEngine.State.ModelReady ||
@@ -32,10 +33,15 @@ class OfflineLlm(context: Context) {
                     engine.loadModel(modelPath)
                     engine.setSystemPrompt(systemPrompt)
                     loadedPath = modelPath
+                    loadedConversationId = conversationId
                 }
                 val answer = StringBuilder()
                 engine.sendUserPrompt("/no_think\n$prompt", 512).collect { answer.append(it) }
-                callback.complete(true, answer.toString().replace(Regex("<think>[\\s\\S]*?</think>"), "").trim())
+                val cleaned = answer.toString()
+                    .replace(Regex("(?is)<think>.*?</think>"), "")
+                    .replace(Regex("(?i)</?think>"), "")
+                    .trim()
+                callback.complete(true, cleaned)
             } catch (error: Exception) {
                 callback.complete(false, error.message ?: error.javaClass.simpleName)
             }
