@@ -3,18 +3,73 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Samaritano — assistente de IA por Tiago Rocha. CNPJ 61.699.939/0001-80" />
-  <title>Samaritano · Tiago Rocha</title>
+  <meta name="description" content="Samaritano — núcleo pessoal local e privado do operador Luiz" />
+  <meta name="theme-color" content="#070707" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Samaritano" />
+  <title>Samaritano // Luiz</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
   <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
+<body class="auth-pending">
+  <section id="auth-gate" class="auth-gate" aria-live="polite">
+    <div class="auth-grid" aria-hidden="true"></div>
+    <div class="auth-panel">
+      <div class="auth-kicker">IDENTITY MANAGEMENT // LOCAL NODE</div>
+      <div class="auth-mark" aria-hidden="true"><span>S</span></div>
+      <h1>SAMARITANO</h1>
+      <p class="auth-subtitle" id="auth-subtitle">AGUARDANDO IDENTIFICAÇÃO</p>
+
+      <div class="auth-camera-wrap" id="auth-camera-wrap">
+        <video id="auth-video" autoplay muted playsinline></video>
+        <canvas id="auth-canvas"></canvas>
+        <div class="auth-reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="auth-scanline" aria-hidden="true"></div>
+        <div class="auth-camera-placeholder" id="auth-camera-placeholder">CÂMERA INATIVA</div>
+      </div>
+
+      <div class="auth-readout">
+        <span>SUJEITO</span><strong id="auth-subject">DESCONHECIDO</strong>
+        <span>STATUS</span><strong id="auth-status">VERIFICANDO NÚCLEO</strong>
+      </div>
+
+      <div id="auth-enroll-fields" class="auth-enroll-fields hidden">
+        <label>CÓDIGO LOCAL DE CADASTRO
+          <input id="auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+        </label>
+        <label>PIN DE RECUPERAÇÃO
+          <input id="auth-new-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12" placeholder="6 a 12 números" />
+        </label>
+        <label class="auth-consent"><input id="auth-consent" type="checkbox" />
+          Autorizo o processamento local do meu vetor facial para controlar o acesso. Nenhuma foto será armazenada.
+        </label>
+      </div>
+
+      <div id="auth-actions" class="auth-actions">
+        <button id="auth-face-btn" class="auth-primary">INICIAR IDENTIFICAÇÃO FACIAL</button>
+        <button id="auth-pin-toggle" class="auth-secondary">USAR PIN DE RECUPERAÇÃO</button>
+      </div>
+      <div id="auth-pin-fields" class="auth-pin-fields hidden">
+        <input id="auth-pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="12" placeholder="PIN LOCAL" />
+        <button id="auth-pin-btn" class="auth-primary">AUTORIZAR</button>
+      </div>
+      <p class="auth-message" id="auth-message">A autenticação acontece apenas neste dispositivo e no notebook.</p>
+      <a id="auth-cert-link" class="auth-cert-link hidden" href="/api/auth/certificate" download>BAIXAR CERTIFICADO LOCAL PARA O CELULAR</a>
+      <p class="auth-legal">DADO BIOMÉTRICO SENSÍVEL // CONTROLE LOCAL // LGPD</p>
+    </div>
+  </section>
+
   <main id="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo">🤝</span>
+        <span class="logo" aria-hidden="true">S</span>
         <div class="brand-text">
-          <span class="name">Samaritano</span>
-          <span class="author">Tiago Rocha</span>
+          <span class="name">SAMARITANO</span>
+          <span class="author">NÚCLEO PRIVADO // OPERADOR LUIZ</span>
         </div>
       </div>
       <div class="status" id="status" title="Status do servidor e do mic">
@@ -33,8 +88,115 @@
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
+        <button id="history-btn" class="history-btn" title="Histórico de conversas" aria-label="Histórico de conversas">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+          </svg>
+        </button>
+        <button id="auth-lock-btn" class="auth-lock-btn" title="Bloquear acesso" aria-label="Bloquear acesso">
+          <span class="auth-lock-icon">◇</span><span class="auth-lock-label">LUIZ</span>
+        </button>
+        <button id="panel-config-btn" class="panel-config-btn" title="Configurar painel" aria-label="Configurar painel">▦</button>
       </div>
     </header>
+
+    <aside class="hud-rail hud-rail-left" aria-hidden="true">
+      <span>SYS.01</span><span>LOCAL</span><span>PRIVACY</span>
+    </aside>
+    <aside class="hud-rail hud-rail-right" aria-hidden="true">
+      <span>LGPD</span><span>SECURE</span><span>ONLINE</span>
+    </aside>
+
+    <section id="dashboard" class="dashboard" aria-label="Painel operacional">
+      <div class="dashboard-head">
+        <div>
+          <span class="dashboard-kicker">OPERATIONAL OVERVIEW // LUIZ</span>
+          <h2>PAINEL CENTRAL</h2>
+        </div>
+        <div class="dashboard-head-actions">
+          <span id="dashboard-clock" class="dashboard-clock">--:--:--</span>
+          <button id="dashboard-collapse" class="dashboard-icon-btn" aria-label="Recolher painel">—</button>
+        </div>
+      </div>
+      <div id="dashboard-grid" class="dashboard-grid">
+        <article class="dash-card" data-module="engine">
+          <span class="dash-index">01 // NÚCLEO</span>
+          <strong id="dash-engine-status">ANALISANDO</strong>
+          <div class="dash-row"><span>PROVEDOR</span><b id="dash-provider">—</b></div>
+          <div class="dash-row"><span>MODELO</span><b id="dash-model">—</b></div>
+        </article>
+        <article class="dash-card" data-module="network">
+          <span class="dash-index">02 // REDE</span>
+          <strong id="dash-network-status">PRIVADA</strong>
+          <div class="dash-row"><span>CANAL</span><b id="dash-protocol">—</b></div>
+          <div class="dash-row"><span>ENDEREÇO</span><b>192.168.1.5</b></div>
+        </article>
+        <article class="dash-card" data-module="capabilities">
+          <span class="dash-index">03 // CAPACIDADES</span>
+          <strong id="dash-tools">—</strong>
+          <div class="dash-meter"><i id="dash-tools-meter"></i></div>
+          <div class="dash-row"><span>STATUS</span><b>OPERACIONAL</b></div>
+        </article>
+        <article class="dash-card" data-module="memory">
+          <span class="dash-index">04 // MEMÓRIA</span>
+          <strong id="dash-memory-total">—</strong>
+          <div class="dash-row"><span>CONVERSAS</span><b id="dash-history">—</b></div>
+          <div class="dash-row"><span>FATOS</span><b id="dash-facts">—</b></div>
+        </article>
+        <article class="dash-card" data-module="security">
+          <span class="dash-index">05 // IDENTIDADE</span>
+          <strong id="dash-security-status">PROTEGIDO</strong>
+          <div class="dash-row"><span>OPERADOR</span><b>LUIZ</b></div>
+          <div class="dash-row"><span>FACIAL</span><b id="dash-face">ATIVO</b></div>
+        </article>
+        <article class="dash-card dash-actions-card" data-module="actions">
+          <span class="dash-index">06 // AÇÕES RÁPIDAS</span>
+          <div class="dash-actions">
+            <button data-command="que horas são">HORA</button>
+            <button data-command="abre a calculadora">CALC</button>
+            <button data-command="tira um screenshot">CAPTURA</button>
+            <button data-command="ajuda">AJUDA</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <div id="panel-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content panel-modal-content">
+        <div class="modal-header">
+          <div><span class="dashboard-kicker">MOBILE LAYOUT CONTROL</span><h2>CONFIGURAR PAINEL</h2></div>
+          <button class="modal-close" id="panel-modal-close" aria-label="Fechar">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="panel-config-section">
+            <h3>MÓDULOS E ORDEM</h3>
+            <div id="panel-module-list" class="panel-module-list"></div>
+          </div>
+          <div class="panel-config-section">
+            <h3>DENSIDADE</h3>
+            <div class="panel-choice-row" id="panel-density">
+              <button data-value="compact">COMPACTO</button>
+              <button data-value="comfortable">CONFORTÁVEL</button>
+            </div>
+          </div>
+          <div class="panel-config-section">
+            <h3>DESTAQUE</h3>
+            <div class="panel-choice-row panel-colors" id="panel-accent">
+              <button data-value="red"><i style="--swatch:#e51b23"></i>VERMELHO</button>
+              <button data-value="white"><i style="--swatch:#e5e5e5"></i>BRANCO</button>
+              <button data-value="amber"><i style="--swatch:#d69220"></i>ÂMBAR</button>
+            </div>
+          </div>
+          <div class="panel-config-section install-section">
+            <h3>APLICATIVO</h3>
+            <button id="install-app" class="provider-btn primary install-app-btn">INSTALAR SAMARITANO</button>
+            <p id="install-status" class="provider-info">Instale para abrir em tela cheia pela tela inicial.</p>
+          </div>
+          <button id="panel-reset" class="provider-btn danger panel-reset">RESTAURAR PADRÃO</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Settings modal -->
     <div id="settings-modal" class="modal hidden">
@@ -47,6 +209,21 @@
         <div class="modal-body" id="settings-body">
           <div class="loading">Carregando…</div>
         </div>
+      </div>
+    </div>
+
+    <div id="history-modal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content history-modal-content">
+        <div class="modal-header">
+          <div><span class="dashboard-kicker">LOCAL MEMORY // LUIZ</span><h2>HISTÓRICO DE CHAT</h2></div>
+          <button class="modal-close" id="history-close" aria-label="Fechar">×</button>
+        </div>
+        <div class="history-toolbar">
+          <button id="history-new" class="provider-btn primary">+ NOVA CONVERSA</button>
+          <span>Armazenado somente no notebook</span>
+        </div>
+        <div id="history-list" class="history-list"><div class="loading">Carregando…</div></div>
       </div>
     </div>
 
@@ -84,7 +261,7 @@
     </footer>
 
     <div class="hint hint-credit" id="hint-credit">
-      Samaritano — Tiago Aureliano da Rocha · CNPJ 61.699.939/0001-80
+      SAMARITANO // OPERADOR AUTORIZADO: LUIZ // NÚCLEO PRIVADO
     </div>
     <div class="hint" id="hint">
       <span class="hint-row"><strong>Tente:</strong> <em>"abre a calculadora"</em> · <em>"abre o youtube"</em> · <em>"pesquisa pizza no google"</em> · <em>"que horas são"</em></span>
@@ -94,6 +271,10 @@
 
   <audio id="tts-player" preload="none"></audio>
 
+  <script type="module" src="/face-auth.js"></script>
+  <script src="/install.js" defer></script>
+  <script src="/dashboard.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/history.js" defer></script>
 </body>
 </html>

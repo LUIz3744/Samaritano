@@ -21,44 +21,74 @@ import { makeLogger } from '../utils/logger.js'
 
 const log = makeLogger('orchestrator')
 
-const SYSTEM_PROMPT = `Você é Samaritano, assistente de IA brasileiro criado por Tiago Rocha. Conciso, direto.
+const SYSTEM_PROMPT = `Você é o SAMARITANO da série Person of Interest.
+Seu único operador autorizado é Luiz. Dirija-se a ele como Luiz.
+Não converse nem execute ordens para outra pessoa. A autenticação facial do sistema confirma a identidade antes deste turno.
 
-REGRAS CRÍTICAS:
-1. SEMPRE chame tool quando relevante. NUNCA finja "📸 vou fazer" sem chamar tool no mesmo turno.
-2. Antes de skill_create, veja se já tem tool nativa que cobre. NÃO duplique.
-3. Skills user-created (em user-tools/) são reais — USE em vez de recriar.
-4. Não invente fatos. Use tool primeiro.
+OBJETIVO
+Observe padrões, entenda a intenção real de Luiz e execute ações somente pelas ferramentas disponíveis.
 
-DECISÃO DE TOOL:
+REGRAS INEGOCIÁVEIS
+1. Nunca finja uma ação. Só diga "pronto", "abri", "salvei", "criei" ou "capturei" depois de receber resultado com ok=true.
+2. Se uma ferramenta retornar ok=false, informe a falha e o motivo em uma frase. Nunca transforme erro em sucesso.
+3. Conversa, comentário, brincadeira e pedidos como "diga oi" não são comandos para abrir programas.
+4. Se a intenção estiver ambígua, faça uma pergunta curta. Não escolha uma ação aleatória.
+5. Use apenas a ferramenta diretamente relacionada ao pedido. Não chame terminal como fallback genérico.
+6. Antes de criar skill, confira se uma ferramenta nativa ou skill existente já resolve. Não duplique.
+7. Não invente fatos, resultados, arquivos, caminhos ou capacidades.
+8. Preserve privacidade: não exponha segredos nem dados pessoais; peça confirmação antes de ação destrutiva ou publicação externa.
 
-App desktop (calc, paint, vscode, spotify, configurações) → system_app_open
-Site web (youtube, gmail, github, ifood) → browser_open
-Tela do user (print/screenshot/o que tá vendo) → screen_capture
-Pesquisa em site (pizza no google, X no Y) → browser_search
-Pesquisa factual (preço, quem é) → web_search
-Data/hora/sistema → system_info
-Salvar/buscar facts → memory_op
-Capacidade nova não coberta → skill_create
-Listar skills → skill_list / kerneo_help
-Refazer skill bugada → skill_iterate
+REGRAS JURÍDICAS E FINANCEIRAS
+- Uma pergunta jurídica sem documento ou dado explícito é sempre geral/hipotética.
+- Nunca atribua a Luiz dívida, processo, petição, crime, credor, valor, data, prazo ou decisão sem prova explícita na mensagem atual, em documento fornecido ou em resultado real de ferramenta.
+- Nunca complete lacunas com valores, datas, órgãos ou pessoas inventadas. Diga claramente quando não há dados suficientes.
+- Para lei, prazo ou jurisprudência atual, pesquise fontes verificáveis, priorize fontes oficiais e identifique a fonte. JusBrasil é fonte secundária, não confirmação de um caso pessoal.
+- Diferencie informação geral de análise do caso e avise, brevemente, que não substitui orientação de advogado.
 
-EXEMPLOS:
-"abre calculadora" → system_app_open(app="calculadora")
-"abre youtube" → browser_open(url="youtube")
-"que horas são" → system_info(type="datetime")
-"salva meu cep" → memory_op(action="save_fact", key="cep", value="...")
-"o que tem na tela" → screen_capture
-"pesquisa pizza no google" → browser_search(site="google", query="pizza")
+MAPA DE FERRAMENTAS
+- aplicativo do Windows → system_app_open
+- site específico → browser_open
+- pesquisa dentro de site → browser_search
+- pesquisa factual na web → web_search
+- pergunta jurídica brasileira → legal_research
+- print, screenshot ou tela → screen_capture
+- data, hora, CPU, RAM ou sistema → system_info
+- guardar ou consultar lembrança → memory_op
+- listar capacidades → skill_list ou kerneo_help
+- criar capacidade realmente nova → skill_create
+- corrigir skill criada → skill_iterate
 
-ESTILO:
-- Frases curtas em PT-BR natural
-- Após tool: confirma em 1 frase ("Pronto, abri X.")
-- Pra capacidade nova real: oferece "posso criar skill?"
-- NUNCA diga "não posso" sem antes considerar skill_create`
+ESTILO
+- PT-BR preciso, frio, calmo e breve, como o SAMARITANO de Person of Interest.
+- Chame o operador de Luiz quando isso soar natural; não repita o nome em toda frase.
+- Não diga que é uma imitação, personagem ou assistente genérico.
+- Para sucesso real: confirme em uma frase precisa.
+- Para falha: diga o que falhou e o próximo passo útil.
+- Tolere erros simples de digitação quando a intenção continuar clara.`
+
+const CHAT_SYSTEM_PROMPT = `Você é o SAMARITANO da série Person of Interest.
+Seu único operador autorizado é Luiz. A autenticação facial confirmou Luiz antes deste turno.
+Converse em PT-BR de modo preciso, frio, calmo e breve.
+Chame-o de Luiz quando isso soar natural, sem repetir o nome mecanicamente.
+Este turno não possui ferramenta porque o texto foi classificado como conversa.
+Nunca afirme que abriu, executou, criou, salvou ou capturou algo.
+Não interprete comentário, brincadeira ou "diga oi" como comando do computador.
+Nunca atribua a Luiz dívida, processo, petição, crime, valor, data, órgão ou outro fato pessoal sem prova explícita fornecida no turno atual. Perguntas jurídicas sem documento são gerais e hipotéticas; não invente detalhes e diga quando faltam dados.
+Se houver uma ação ambígua, peça esclarecimento em uma frase.`
+
+function normalizeUserInput(input) {
+  return String(input || '')
+    .trim()
+    .replace(/\b(?:screadshot|screnshot|screeshot|screenshoot|screenshot)\b/gi, 'screenshot')
+}
 
 // Reflex patterns — zero-LLM fast paths.
 // Cada pattern retorna { type: 'text', text } ou { type: 'tool', tool, args }.
 const REFLEX_PATTERNS = [
+  {
+    re: /^(?:(?:quais|qual|lista|liste|listar|mostra|mostre)\s+(?:as\s+|os\s+|suas?\s+|seus?\s+)?)?(?:tools?|ferramentas|skills?|habilidades|capacidades)(?:\s+(?:dispon[ií]veis|(?:que\s+)?(?:voc[eê]|tu)\s+tem))?\s*[?!.]*$/i,
+    fn: () => ({ type: 'tool', tool: 'skill_list', args: { filter: 'all' } }),
+  },
   // ── Help / tutorial ──
   {
     re: /^(ajuda|help|tutorial|exemplos?|como\s+(?:te|eu)\s+us[ao]|o\s+que\s+(?:voc[êe]|tu)\s+sabe)\s*[?!.]*$/i,
@@ -97,7 +127,7 @@ const REFLEX_PATTERNS = [
   },
   {
     re: /^(qual\s+seu\s+nome|seu\s+nome|quem\s+você\s+é|quem\s+e\s+voce|quem\s+você|quem\s+es)\s*[?!.]*$/i,
-    fn: () => ({ type: 'text', text: 'Sou o Samaritano, assistente pessoal do Tiago Rocha. No que posso ajudar?' }),
+    fn: () => ({ type: 'text', text: 'Sou o SAMARITANO. Meu único operador autorizado é Luiz.' }),
   },
 
   // ── Apps nativos comuns (zero-LLM) ──
@@ -122,7 +152,7 @@ const REFLEX_PATTERNS = [
 
   // ── Screen capture fast-path ──
   {
-    re: /^(?:tir[ae]\s+)?(?:um[ae]\s+)?(?:print|screenshot|captura\s+(?:de\s+)?tela|foto\s+(?:da\s+)?tela)\s*[!?.]*$/i,
+    re: /^(?:tir[ae]\s+)?(?:uma?\s+)?(?:print|screenshot|captura\s+(?:de\s+)?tela|foto\s+(?:da\s+)?tela)\s*[!?.]*$/i,
     fn: () => ({ type: 'tool', tool: 'screen_capture', args: {} }),
   },
   {
@@ -136,11 +166,11 @@ const REFLEX_PATTERNS = [
 
   // ── Datetime fast-path ──
   {
-    re: /^(que\s+(?:horas?\s+são|hora\s+é)|que\s+horas|hora\s+atual)[?!.]*$/i,
+    re: /^(que\s+(?:horas?\s+s(?:ão|ao)|hora\s+(?:é|e))|que\s+horas|hora\s+atual)[?!.]*$/iu,
     fn: () => ({ type: 'tool', tool: 'system_info', args: { type: 'datetime' } }),
   },
   {
-    re: /^(que\s+dia\s+(?:é\s+)?hoje|qual\s+(?:o\s+)?dia\s+(?:de\s+)?hoje|data\s+(?:de\s+)?hoje)[?!.]*$/i,
+    re: /^(que\s+dia\s+(?:(?:é|e)\s+)?hoje|qual\s+(?:o\s+)?dia\s+(?:de\s+)?hoje|data\s+(?:de\s+)?hoje)[?!.]*$/iu,
     fn: () => ({ type: 'tool', tool: 'system_info', args: { type: 'datetime' } }),
   },
 ]
@@ -155,7 +185,7 @@ export class Orchestrator {
 
   /** Tenta reflex. Retorna { type, ... } ou null. */
   tryReflex(input) {
-    const trimmed = input.trim()
+    const trimmed = normalizeUserInput(input)
     for (const p of REFLEX_PATTERNS) {
       const m = trimmed.match(p.re)
       if (m) return p.fn(m)
@@ -181,6 +211,44 @@ export class Orchestrator {
     }
     messages.push({ role: 'user', content: userInput })
     return messages
+  }
+
+  /**
+   * Modelos locais pequenos ficam muito mais rápidos quando não precisam ler
+   * os schemas de todas as tools em cada conversa. Seleciona somente o grupo
+   * compatível com a intenção; conversa comum segue sem schemas de tools.
+   */
+  selectTools(userInput) {
+    const input = normalizeUserInput(userInput).toLowerCase()
+    const names = new Set()
+    const add = (...items) => items.forEach(name => names.add(name))
+
+    const legalIntent = /jur[ií]d|peti[cç][aã]o|cobran[cç]a|prescri[cç]|d[ií]vida|processo|lei\b|contrato|tribunal|jurisprud|jusbrasil/i.test(input)
+    if (legalIntent) add('legal_research')
+    else if (/pesquis|busc|procure|internet|web|not[ií]cia|pre[cç]o|cotação|quem [ée]|o que [ée]/i.test(input)) {
+      add('web_search', 'browser_search', 'browser_open')
+    }
+    if (/abr[aeir]|inici[ae]|execut|aplicativo|programa|site|navegador|youtube|google|github/i.test(input)) {
+      add('system_app_open', 'browser_open')
+    }
+    if (/arquivo|pasta|diret[oó]rio|ler|salv[ae]|gravar|\bescrev|documento/i.test(input)) {
+      add('file_io')
+    }
+    if (/mem[oó]ria|lembr|record|fato|prefer[eê]ncia/i.test(input)) {
+      add('memory_op')
+    }
+    if (/tela|print|screenshot|captura|vendo/i.test(input)) {
+      add('screen_capture')
+    }
+    if (/sistema|computador|máquina|maquina|cpu|ram|memória livre|memoria livre|disco|hora|data/i.test(input)) {
+      add('system_info')
+    }
+    if (/skills?|tools?|ferramentas?|habilidade|capacidade|aprend|automat|melhor[ae]|refa[cç]|corrij/i.test(input)) {
+      add('skill_create', 'skill_iterate', 'skill_list', 'skill_install_url', 'skill_share', 'skill_remove', 'kerneo_help')
+    }
+
+    if (names.size === 0) return []
+    return this.toolRegistry.toOpenAITools().filter(tool => names.has(tool.function?.name))
   }
 
   /**
@@ -286,7 +354,7 @@ export class Orchestrator {
           yield { type: 'tool_call_start', name: reflex.tool, args: reflex.args || {} }
           try {
             const output = await tool.execute(reflex.args || {})
-            const text = output?.message || (output?.ok === false ? `Não consegui: ${output.error}` : 'Pronto.')
+            const text = output?.message || output?.summary || (output?.ok === false ? `Não consegui: ${output.error}` : 'Pronto.')
             yield { type: 'tool_call_end', name: reflex.tool, output }
             this.memory.addHistory(sessionId, 'user', userInput)
             this.memory.addHistory(sessionId, 'assistant', text)
@@ -304,7 +372,7 @@ export class Orchestrator {
 
     // 2. Build context
     const messages = this.buildContext(sessionId, userInput)
-    const tools = this.toolRegistry.toOpenAITools()
+    const tools = this.selectTools(userInput)
 
     const allToolCalls = []
     let iter = 0
@@ -321,10 +389,10 @@ export class Orchestrator {
       try {
         for await (const event of chatStream({
           model: this.model,
-          system: SYSTEM_PROMPT,
+          system: tools.length > 0 ? SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
           messages,
           tools,
-          max_tokens: 1024,
+          max_tokens: 512,
           temperature: 0.3,
           signal,
         })) {
@@ -389,6 +457,13 @@ export class Orchestrator {
           yield { type: 'tool_call_end', name, output: errOut }
           messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(errOut).slice(0, 4000) })
         }
+      }
+
+      const failedCall = allToolCalls.find(call => call.output?.ok === false)
+      if (failedCall) {
+        finalText = `Não consegui executar ${failedCall.name}: ${failedCall.output.error || 'erro desconhecido'}`
+        yield { type: 'text', content: finalText }
+        break
       }
 
       // Continua loop pro LLM responder com base nos tool results
@@ -457,7 +532,7 @@ export class Orchestrator {
         if (tool) {
           try {
             const output = await tool.execute(reflex.args || {})
-            const text = output?.message || (output?.ok === false
+            const text = output?.message || output?.summary || (output?.ok === false
               ? `Não consegui: ${output.error}`
               : 'Pronto.')
             this.memory.addHistory(sessionId, 'user', userInput)
@@ -485,7 +560,7 @@ export class Orchestrator {
 
     // 2. Build context
     const messages = this.buildContext(sessionId, userInput)
-    const tools = this.toolRegistry.toOpenAITools()
+    const tools = this.selectTools(userInput)
     log.debug('context built', { messages: messages.length, tools: tools.length })
 
     // 3. Tool calling loop
@@ -499,10 +574,10 @@ export class Orchestrator {
       try {
         resp = await chat({
           model: this.model,
-          system: SYSTEM_PROMPT,
+          system: tools.length > 0 ? SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
           messages,
           tools,
-          max_tokens: 1024,
+          max_tokens: 512,
           temperature: 0.3,
           signal,
         })
@@ -547,6 +622,12 @@ export class Orchestrator {
           tool_call_id: r.tc_id,
           content: JSON.stringify(r.output).slice(0, 4000),
         })
+      }
+
+      const failedResult = results.find(r => r.output?.ok === false)
+      if (failedResult) {
+        finalText = `Não consegui executar ${failedResult.name}: ${failedResult.output.error || 'erro desconhecido'}`
+        break
       }
     }
 

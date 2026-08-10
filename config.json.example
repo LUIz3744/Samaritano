@@ -74,8 +74,8 @@
       "apiKey": "ollama",
       "baseUrl": "http://localhost:11434/v1",
       "models": {
-        "fast": "llama3.2",
-        "smart": "llama3.1:70b"
+        "fast": "llama3.2:3b",
+        "smart": "qwen3:4b-instruct"
       },
       "// docs": "Ollama local — 100% offline, gratuito. Instale em https://ollama.com e rode `ollama pull llama3.2`. apiKey é literal 'ollama' (não precisa de chave real)."
     },
@@ -92,7 +92,7 @@
   },
 
   "voice": {
-    "ttsEnabled": true,
+    "ttsEnabled": false,
     "voice": "nova",
     "speed": 1.0,
     "// docs": "Vozes OpenAI: alloy, echo, fable, onyx, nova, shimmer, sage, coral, verse"
@@ -102,13 +102,22 @@
     "port": 5070,
     "httpsPort": 5071,
     "httpsEnabled": true,
+    "faceAuthEnabled": true,
     "bindLan": false,
-    "// docs": "bindLan=true expõe na rede local (acesso via celular). Cuidado: sem auth!"
+    "// docs": "bindLan=true expõe somente na rede privada; mantenha faceAuthEnabled=true para exigir rosto ou PIN."
   },
 
   "logging": {
     "level": "info",
     "// docs": "error | warn | info | debug"
+  },
+
+  "privacy": {
+    "historyRetentionDays": 30,
+    "maxHistoryItems": 1000,
+    "redactSensitiveHistory": true,
+    "allowSensitiveFacts": false,
+    "// docs": "Histórico expira automaticamente. CPF, cartão, senhas e chaves de API são removidos do histórico e bloqueados em fatos por padrão."
   },
 
   "skills": {

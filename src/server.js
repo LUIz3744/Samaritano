@@ -46,6 +46,7 @@ import {
 } from './utils/config.js'
 import { resetCache as resetLLMCache } from './llm/index.js'
 import { makeLogger } from './utils/logger.js'
+import { FaceAuth } from './auth/face_auth.js'
 
 const log = makeLogger('server')
 
@@ -60,6 +61,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data')
 const PUBLIC_DIR = path.join(__dirname, '..', 'public')
 const BIND_HOST = config.server.bindLan ? '0.0.0.0' : '127.0.0.1'
 const HTTPS_ENABLED = config.server.httpsEnabled
+const FACE_AUTH_ENABLED = config.server.faceAuthEnabled === true
 
 // ── Bootstrap ──
 log.info('booting...')
@@ -81,7 +83,8 @@ try {
   process.exit(1)
 }
 
-const memoryStore = new MemoryStore(DATA_DIR)
+const memoryStore = new MemoryStore(DATA_DIR, config.privacy)
+const faceAuth = FACE_AUTH_ENABLED ? new FaceAuth(DATA_DIR, log) : null
 setMemoryToolStore(memoryStore)
 
 const toolRegistry = new ToolRegistry()
@@ -135,7 +138,33 @@ async function readJsonBody(req) {
 
 function isLoopback(req) {
   const ip = req.socket?.remoteAddress || ''
-  return ip.includes('127.0.0.1') || ip.includes('::1') || ip.includes('::ffff:127')
+  if (ip.includes('127.0.0.1') || ip.includes('::1') || ip.includes('::ffff:127')) return true
+
+  // Navegadores embutidos podem chegar por uma ponte local e não preservar o IP
+  // de loopback. Nesse caso, aceita apenas requisições originadas da própria GUI
+  // servida em localhost/127.0.0.1. Sites externos continuam bloqueados.
+  const requestHost = String(req.headers.host || '').toLowerCase()
+  const hostname = requestHost.split(':')[0].replace(/^\[|\]$/g, '')
+  if (!['localhost', '127.0.0.1', '::1'].includes(hostname)) return false
+
+  for (const header of [req.headers.origin, req.headers.referer]) {
+    if (!header) continue
+    try {
+      if (new URL(header).host.toLowerCase() === requestHost) return true
+    } catch {}
+  }
+  return false
+}
+
+function isPrivateNetwork(req) {
+  const raw = String(req.socket?.remoteAddress || '').toLowerCase()
+  const ip = raw.replace(/^::ffff:/, '')
+  if (ip === '::1' || ip.startsWith('127.')) return true
+  if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true
+  const match172 = ip.match(/^172\.(\d+)\./)
+  if (match172 && Number(match172[1]) >= 16 && Number(match172[1]) <= 31) return true
+  if (ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:')) return true
+  return false
 }
 
 const STATIC_TYPES = {
@@ -146,6 +175,7 @@ const STATIC_TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 }
 
 function serveStatic(req, res, urlPath) {
@@ -164,27 +194,138 @@ function serveStatic(req, res, urlPath) {
   })
 }
 
+async function providerStatus(liveConfig, providerName) {
+  if (providerName !== 'ollama') return { ready: true, detail: 'configured' }
+  const ollama = liveConfig.providers?.ollama || {}
+  const root = String(ollama.baseUrl || 'http://localhost:11434/v1').replace(/\/v1\/?$/, '')
+  try {
+    const response = await fetch(`${root}/api/tags`, { signal: AbortSignal.timeout(1500) })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const data = await response.json()
+    const installed = new Set((data.models || []).map(model => String(model.name).replace(/:latest$/, '')))
+    const fast = ollama.models?.fast || 'llama3.2:3b'
+    const smart = ollama.models?.smart || 'qwen3:4b'
+    const hasModel = name => installed.has(name) || installed.has(String(name).replace(/:latest$/, ''))
+    return {
+      ready: hasModel(fast) && hasModel(smart),
+      detail: hasModel(fast) && hasModel(smart) ? 'ready' : 'models_missing',
+      models: { fast, smart },
+      models_ready: { fast: hasModel(fast), smart: hasModel(smart) },
+    }
+  } catch {
+    return { ready: false, detail: 'ollama_offline' }
+  }
+}
+
 // ── HTTP handler ──
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`)
   const route = `${req.method} ${url.pathname}`
 
+  if (config.server.bindLan && !isPrivateNetwork(req)) {
+    return json(res, 403, { error: 'private_network_only' })
+  }
+
   // CORS — permite GUI servida de qualquer origem (security via loopback ainda aplica)
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  const requestOrigin = req.headers.origin
+  if (requestOrigin) {
+    try {
+      const origin = new URL(requestOrigin)
+      if (origin.host === req.headers.host) res.setHeader('Access-Control-Allow-Origin', requestOrigin)
+    } catch {}
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
   try {
+    // Autenticação biométrica local. Fotos nunca chegam ao servidor; apenas
+    // descritores numéricos produzidos no navegador são comparados aqui.
+    if (route === 'GET /api/auth/status') {
+      return json(res, 200, FACE_AUTH_ENABLED
+        ? { required: true, ...faceAuth.status(req) }
+        : { required: false, enrolled: false, authenticated: true, principal: 'Luiz', operator: 'Luiz', method: 'local-network' })
+    }
+
+    if (route === 'GET /api/auth/certificate') {
+      const certificatePath = path.join(DATA_DIR, 'certs', 'cert.pem')
+      try {
+        const certificate = fs.readFileSync(certificatePath)
+        res.writeHead(200, {
+          'Content-Type': 'application/x-x509-ca-cert',
+          'Content-Disposition': 'attachment; filename="samaritano-local-ca.crt"',
+          'Content-Length': certificate.length,
+          'Cache-Control': 'no-store',
+        })
+        res.end(certificate)
+      } catch {
+        return json(res, 404, { ok: false, error: 'certificate_not_ready' })
+      }
+      return
+    }
+
+    if (route === 'POST /api/auth/enroll') {
+      if (!FACE_AUTH_ENABLED) return json(res, 409, { ok: false, error: 'face_auth_disabled' })
+      const body = await readJsonBody(req)
+      const result = faceAuth.enroll(body, req, res)
+      return json(res, result.status, result.body)
+    }
+
+    if (route === 'POST /api/auth/verify') {
+      if (!FACE_AUTH_ENABLED) return json(res, 409, { ok: false, error: 'face_auth_disabled' })
+      const body = await readJsonBody(req)
+      const result = faceAuth.verifyFace(body, req, res)
+      return json(res, result.status, result.body)
+    }
+
+    if (route === 'POST /api/auth/pin') {
+      if (!FACE_AUTH_ENABLED) return json(res, 409, { ok: false, error: 'face_auth_disabled' })
+      const body = await readJsonBody(req)
+      const result = faceAuth.verifyPin(body, req, res)
+      return json(res, result.status, result.body)
+    }
+
+    if (route === 'POST /api/auth/logout') {
+      if (!FACE_AUTH_ENABLED) return json(res, 200, { ok: true })
+      faceAuth.clearSession(req, res)
+      return json(res, 200, { ok: true })
+    }
+
+    if (route === 'POST /api/auth/reset') {
+      if (!FACE_AUTH_ENABLED) return json(res, 409, { ok: false, error: 'face_auth_disabled' })
+      if (!faceAuth.isAuthenticated(req)) return json(res, 401, { ok: false, error: 'face_authentication_required' })
+      const body = await readJsonBody(req)
+      if (body.confirm !== 'APAGAR BIOMETRIA') return json(res, 400, { ok: false, error: 'confirmation_required' })
+      return json(res, 200, faceAuth.reset(req, res))
+    }
+
+    const protectedPath = [
+      '/chat', '/chat/stream', '/tts', '/stt', '/tools', '/tools/exec',
+      '/api/config', '/api/privacy', '/api/dashboard', '/api/chats',
+    ].some(prefix => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))
+
+    if (FACE_AUTH_ENABLED && protectedPath && !faceAuth.isEnrolled()) {
+      return json(res, 423, { ok: false, error: 'face_enrollment_required' })
+    }
+    if (FACE_AUTH_ENABLED && protectedPath && !faceAuth.isAuthenticated(req)) {
+      return json(res, 401, { ok: false, error: 'face_authentication_required' })
+    }
+
     // GET /health
     if (route === 'GET /health') {
-      const info = configInfo(config)
+      const liveConfig = loadConfig()
+      const info = configInfo(liveConfig)
+      const engine = await providerStatus(liveConfig, info.provider)
       return json(res, 200, {
         ready: true,
         ts: Date.now(),
         version: '0.3.0',
         tools: toolRegistry.list().length,
         provider: info.provider,
+        provider_ready: engine.ready,
+        provider_detail: engine.detail,
+        models: engine.models,
+        models_ready: engine.models_ready,
         https: HTTPS_ENABLED,
         skills_auto_create: info.skills_auto_create,
       })
@@ -193,6 +334,73 @@ async function handleRequest(req, res) {
     // GET /tools
     if (route === 'GET /tools') {
       return json(res, 200, { tools: toolRegistry.list() })
+    }
+
+    if (route === 'GET /api/dashboard') {
+      const liveConfig = loadConfig()
+      const info = configInfo(liveConfig)
+      const engine = await providerStatus(liveConfig, info.provider)
+      const privacy = memoryStore.privacySummary()
+      return json(res, 200, {
+        ok: true,
+        ts: Date.now(),
+        uptime_seconds: Math.round(process.uptime()),
+        operator: 'Luiz',
+        network: config.server.bindLan ? 'private-lan' : 'local-only',
+        protocol: req.socket?.encrypted ? 'HTTPS' : 'HTTP',
+        provider: info.provider,
+        provider_ready: engine.ready,
+        models: engine.models || {},
+        tools: toolRegistry.list().length,
+        memory: {
+          history: privacy.history,
+          facts: privacy.facts,
+          retention_days: privacy.retention_days,
+        },
+        security: {
+          facial: FACE_AUTH_ENABLED,
+          private_network_only: true,
+          https: HTTPS_ENABLED,
+        },
+      })
+    }
+
+    if (route === 'GET /api/chats') {
+      return json(res, 200, { ok: true, sessions: memoryStore.listChatSessions(60) })
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/api/chats/')) {
+      const sessionId = decodeURIComponent(url.pathname.slice('/api/chats/'.length))
+      if (!/^web-[a-z0-9_-]{1,80}$/i.test(sessionId)) {
+        return json(res, 400, { ok: false, error: 'invalid_session_id' })
+      }
+      return json(res, 200, {
+        ok: true,
+        session_id: sessionId,
+        messages: memoryStore.getChatSession(sessionId, 300),
+      })
+    }
+
+    // Direitos do titular: consulta, portabilidade e eliminação (somente no PC local).
+    if (route === 'GET /api/privacy') {
+      if (!isLoopback(req)) return json(res, 403, { error: 'loopback_only' })
+      return json(res, 200, memoryStore.privacySummary())
+    }
+
+    if (route === 'GET /api/privacy/export') {
+      if (!isLoopback(req)) return json(res, 403, { error: 'loopback_only' })
+      res.setHeader('Content-Disposition', `attachment; filename="samaritano-dados-${Date.now()}.json"`)
+      return json(res, 200, memoryStore.exportData())
+    }
+
+    if (route === 'POST /api/privacy/delete') {
+      if (!isLoopback(req)) return json(res, 403, { error: 'loopback_only' })
+      const body = await readJsonBody(req)
+      if (body.confirm !== true) return json(res, 400, { error: 'confirm=true obrigatório' })
+      const allowed = ['all', 'history', 'facts', 'session']
+      if (!allowed.includes(body.scope)) return json(res, 400, { error: 'scope inválido', allowed })
+      const deleted = memoryStore.deleteData(body.scope, body.sessionId)
+      return json(res, 200, { ok: true, deleted })
     }
 
     // POST /chat
@@ -452,7 +660,7 @@ setTimeout(() => {
   const httpUrl = `http://${localhost}:${PORT_HTTP}`
   const httpsUrl = httpsUp ? `https://${localhost}:${PORT_HTTPS}` : null
   log.info('═══════════════════════════════════════════════')
-  log.info(`✅ Samaritano online (Tiago Rocha)`)
+  log.info(`✅ Samaritano online (operador Luiz)`)
   log.info(`   HTTP:  ${httpUrl}`)
   if (httpsUrl) log.info(`   HTTPS: ${httpsUrl}  (recomendado pra microfone)`)
   log.info(`   Health: ${httpUrl}/health`)

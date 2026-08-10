@@ -21,7 +21,8 @@
 // 1. CONSTANTES (declaradas ANTES de qualquer init)
 // ════════════════════════════════════════════════════════════
 
-const SESSION_ID = 'web-' + Math.random().toString(36).slice(2, 10)
+let SESSION_ID = localStorage.getItem('samaritano:active-session') || ('web-' + Math.random().toString(36).slice(2, 10))
+localStorage.setItem('samaritano:active-session', SESSION_ID)
 
 const State = {
   IDLE: 'idle',
@@ -183,7 +184,15 @@ async function checkHealth() {
     const provider = j.provider || '?'
     statusText.textContent = `${httpsTag} · ${j.tools || 0} tools · ${provider}`
 
-    if (!j.provider) {
+    if (j.provider_ready === false) {
+      statusDot.classList.remove('ok')
+      statusDot.classList.add('error')
+      statusText.textContent = `MOTOR OFFLINE · ${provider}`
+      const detail = j.provider_detail === 'models_missing'
+        ? `Modelos ausentes. Instale <code>${j.models?.fast || 'llama3.2:3b'}</code> e <code>${j.models?.smart || 'qwen3:4b'}</code>.`
+        : 'Ollama não está iniciado ou instalado. Abra o Ollama e recarregue esta página.'
+      showBanner(`⚠ <b>Motor de IA indisponível.</b> ${detail}`, 'error')
+    } else if (!j.provider) {
       showBanner(
         '⚠ <b>Nenhum provider LLM configurado!</b> Clique em ⚙ pra adicionar uma API key.',
         'error'
@@ -239,7 +248,7 @@ function showEmptyState() {
     { icon: '🌐', text: 'abre o youtube' },
     { icon: '🔍', text: 'pesquisa pizza no google' },
     { icon: '🕐', text: 'que horas são' },
-    { icon: '✨', text: 'cria uma skill que tira screenshot' },
+    { icon: '📸', text: 'tira um screenshot' },
     { icon: '❓', text: 'ajuda' },
   ]
 
@@ -558,6 +567,7 @@ async function submitStream() {
   let pendingSentence = ''
   let toolsContainer = null
   const toolChipMap = {}
+  const startedToolCalls = []
   let iterations = 0
   let fromReflex = false
 
@@ -665,16 +675,34 @@ async function submitStream() {
           chat.scrollTop = chat.scrollHeight
           flushSentencesToTTS()
         } else if (evt.type === 'tool_call_start') {
+          startedToolCalls.push({ name: evt.name, args: evt.args || {} })
           addOrUpdateToolChip(evt.name, 'pending')
+          if (evt.name === 'skill_create' && !fullText) {
+            textNode.nodeValue = 'Criando a skill localmente… neste notebook pode levar até 4 minutos. Mantenha a página aberta.'
+          }
         } else if (evt.type === 'tool_call_end') {
           addOrUpdateToolChip(evt.name, evt.output?.ok === false ? 'err' : 'ok', evt.output)
         } else if (evt.type === 'reflex') {
           fromReflex = true
+          // Reflexos retornam a resposta completa neste evento, sem chunks
+          // do tipo `text`. Antes o texto era ignorado e o balão ficava vazio.
+          if (evt.text && !fullText) {
+            fullText = evt.text
+            textNode.nodeValue = fullText
+            pendingSentence += evt.text
+            chat.scrollTop = chat.scrollHeight
+            flushSentencesToTTS()
+          }
         } else if (evt.type === 'meta') {
           if (evt.iteration) iterations = Math.max(iterations, evt.iteration)
         } else if (evt.type === 'done') {
           if (evt.from_reflex) fromReflex = true
           if (evt.iterations) iterations = evt.iterations
+          // Compatibilidade defensiva com respostas completas sem chunks.
+          if (!fullText && evt.text) {
+            fullText = evt.text
+            textNode.nodeValue = fullText
+          }
         } else if (evt.type === 'error') {
           fullText += `\n❌ ${evt.message}`
           textNode.nodeValue = fullText
@@ -705,8 +733,31 @@ async function submitStream() {
     cursor.remove()
     assistantEl.classList.remove('streaming')
     if (!fullText) {
-      textNode.nodeValue = `❌ Falha de rede: ${err.message}\n💡 Tenta recarregar a página (F5).`
-      assistantEl.classList.add('error')
+      const skillCall = startedToolCalls.find(call => call.name === 'skill_create')
+      let recoveredSkill = null
+      if (skillCall) {
+        try {
+          const toolsResponse = await fetch('/tools', { cache: 'no-store' })
+          if (toolsResponse.ok) {
+            const available = (await toolsResponse.json()).tools || []
+            const requestedName = String(skillCall.args?.name || '').trim()
+            if (requestedName) {
+              recoveredSkill = available.find(tool => tool.name === requestedName)
+            }
+          }
+        } catch {}
+      }
+
+      if (recoveredSkill) {
+        textNode.nodeValue = `✅ A conexão do celular encerrou, mas a skill "${recoveredSkill.name}" foi criada no notebook e já está disponível.`
+        addOrUpdateToolChip('skill_create', 'ok')
+      } else if (skillCall) {
+        textNode.nodeValue = '⚠ A conexão do celular encerrou durante a criação. Recarregue a página e diga “lista minhas skills” para conferir o resultado.'
+        assistantEl.classList.add('error')
+      } else {
+        textNode.nodeValue = `❌ Falha de rede: ${err.message}\n💡 Tenta recarregar a página.`
+        assistantEl.classList.add('error')
+      }
     } else {
       const meta = document.createElement('span')
       meta.className = 'meta error'
@@ -747,6 +798,35 @@ function appendMsg(role, text, opts = {}) {
   chat.appendChild(el)
   chat.scrollTop = chat.scrollHeight
   return el
+}
+
+function loadChatSession(sessionId, messages = []) {
+  if (!/^web-[a-z0-9_-]{1,80}$/i.test(String(sessionId))) return false
+  SESSION_ID = String(sessionId)
+  localStorage.setItem('samaritano:active-session', SESSION_ID)
+  if (!chat) return false
+  chat.innerHTML = ''
+  for (const message of messages) {
+    if (message.role !== 'user' && message.role !== 'assistant') continue
+    const when = Number(message.created_at)
+    const meta = Number.isFinite(when)
+      ? new Date(when).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : ''
+    appendMsg(message.role, message.content, { meta })
+  }
+  if (messages.length === 0) showEmptyState()
+  input?.focus()
+  return true
+}
+
+function createNewChatSession() {
+  return loadChatSession('web-' + Math.random().toString(36).slice(2, 10), [])
+}
+
+window.SamaritanoChat = {
+  loadSession: loadChatSession,
+  newSession: createNewChatSession,
+  getSessionId: () => SESSION_ID,
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1325,10 +1405,14 @@ async function openSettings() {
   settingsModal.classList.remove('hidden')
   settingsBody.innerHTML = '<div class="loading">Carregando…</div>'
   try {
-    const r = await fetch('/api/config')
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    const cfg = await r.json()
-    renderSettings(cfg)
+    const [configResponse, privacyResponse] = await Promise.all([
+      fetch('/api/config'),
+      fetch('/api/privacy'),
+    ])
+    if (!configResponse.ok) throw new Error(`HTTP ${configResponse.status}`)
+    const cfg = await configResponse.json()
+    const privacy = privacyResponse.ok ? await privacyResponse.json() : null
+    renderSettings(cfg, privacy)
   } catch (err) {
     settingsBody.innerHTML = `<div class="loading">Erro: ${err.message}</div>`
   }
@@ -1338,7 +1422,7 @@ function closeSettings() {
   if (settingsModal) settingsModal.classList.add('hidden')
 }
 
-function renderSettings(cfg) {
+function renderSettings(cfg, privacy = null) {
   if (!settingsBody) return
 
   const primary = (() => {
@@ -1407,6 +1491,22 @@ function renderSettings(cfg) {
         Se "auto", usa o primeiro com key. Se específico, força esse mas tem fallback automático.
       </div>
     </div>
+    <div class="settings-section privacy-section">
+      <h3>Privacidade e LGPD</h3>
+      <div class="privacy-summary">
+        <div><strong>${privacy?.history ?? '—'}</strong><span>mensagens locais</span></div>
+        <div><strong>${privacy?.facts ?? '—'}</strong><span>fatos memorizados</span></div>
+        <div><strong>${privacy?.retention_days ?? 30}d</strong><span>retenção máxima</span></div>
+      </div>
+      <p class="provider-info">CPF, cartões, senhas e chaves de API são removidos do histórico. Os dados permanecem neste computador; mensagens enviadas ao provedor seguem a política dele.</p>
+      <div class="privacy-actions">
+        <button class="provider-btn" id="privacy-export">Exportar meus dados</button>
+        <button class="provider-btn danger" id="privacy-delete-history">Apagar histórico</button>
+        <button class="provider-btn danger" id="privacy-delete-face">Apagar biometria</button>
+        <button class="provider-btn danger" id="privacy-delete-all">Apagar tudo</button>
+      </div>
+      <div class="provider-status" id="privacy-status"></div>
+    </div>
     <div class="save-bar">
       <span class="save-bar-msg" id="save-msg"></span>
       <button class="provider-btn" id="reload-config">Recarregar</button>
@@ -1423,6 +1523,63 @@ function renderSettings(cfg) {
   if (sp) sp.onclick = savePrimaryProvider
   const rc = $('reload-config')
   if (rc) rc.onclick = openSettings
+  const pe = $('privacy-export')
+  if (pe) pe.onclick = () => { window.location.href = '/api/privacy/export' }
+  const pdh = $('privacy-delete-history')
+  if (pdh) pdh.onclick = () => deletePrivateData('history')
+  const pdf = $('privacy-delete-face')
+  if (pdf) pdf.onclick = deleteFaceData
+  const pda = $('privacy-delete-all')
+  if (pda) pda.onclick = () => deletePrivateData('all')
+}
+
+async function deleteFaceData() {
+  if (!window.confirm('Apagar o cadastro facial de Luiz? Será necessário cadastrar novamente.')) return
+  const status = $('privacy-status')
+  try {
+    const response = await fetch('/api/auth/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'APAGAR BIOMETRIA' }),
+    })
+    const result = await response.json()
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`)
+    location.reload()
+  } catch (err) {
+    if (status) {
+      status.textContent = `Erro ao apagar biometria: ${err.message}`
+      status.className = 'provider-status error'
+    }
+  }
+}
+
+async function deletePrivateData(scope) {
+  const label = scope === 'all' ? 'todos os fatos, conversas e sessões' : 'todo o histórico de conversas'
+  if (!window.confirm(`Apagar ${label}? Esta ação não pode ser desfeita.`)) return
+  const status = $('privacy-status')
+  if (status) {
+    status.textContent = 'Apagando dados locais…'
+    status.className = 'provider-status testing'
+  }
+  try {
+    const response = await fetch('/api/privacy/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, confirm: true }),
+    })
+    const result = await response.json()
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`)
+    if (status) {
+      status.textContent = 'Dados apagados com sucesso.'
+      status.className = 'provider-status ok'
+    }
+    setTimeout(openSettings, 700)
+  } catch (err) {
+    if (status) {
+      status.textContent = `Erro: ${err.message}`
+      status.className = 'provider-status error'
+    }
+  }
 }
 
 async function testProvider(name) {

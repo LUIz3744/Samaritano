@@ -12,11 +12,31 @@
 
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
+import { X509Certificate } from 'crypto'
 import { execSync, spawnSync } from 'child_process'
 import selfsigned from 'selfsigned'
 import { makeLogger } from './logger.js'
 
 const log = makeLogger('certs')
+
+function getLanIPv4() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter(address => address && address.family === 'IPv4' && !address.internal)
+    .map(address => address.address)
+}
+
+function certificateCoversLan(cert) {
+  const addresses = getLanIPv4()
+  if (!addresses.length) return true
+  try {
+    const san = new X509Certificate(cert).subjectAltName || ''
+    return addresses.every(address => san.includes(`IP Address:${address}`))
+  } catch {
+    return false
+  }
+}
 
 /**
  * Verifica se mkcert está instalado e funcional no sistema.
@@ -50,7 +70,7 @@ function generateWithMkcert(certsDir) {
   const r = spawnSync('mkcert', [
     '-cert-file', certPath,
     '-key-file', keyPath,
-    'localhost', '127.0.0.1', '::1', '*.localhost',
+    'localhost', '127.0.0.1', '::1', '*.localhost', ...getLanIPv4(),
   ], { stdio: 'inherit', timeout: 30000 })
 
   if (r.status !== 0) {
@@ -77,17 +97,17 @@ function generateSelfSigned(certsDir) {
   const attrs = [
     { name: 'commonName', value: 'localhost' },
     { name: 'countryName', value: 'BR' },
-    { name: 'organizationName', value: 'Samaritano - Tiago Rocha' },
+    { name: 'organizationName', value: 'Samaritano - Operador Luiz' },
   ]
   const opts = {
     algorithm: 'sha256',
     days: 3650,
     keySize: 2048,
     extensions: [
-      { name: 'basicConstraints', cA: false },
+      { name: 'basicConstraints', cA: true },
       {
         name: 'keyUsage',
-        keyCertSign: false,
+        keyCertSign: true,
         digitalSignature: true,
         nonRepudiation: true,
         keyEncipherment: true,
@@ -101,6 +121,7 @@ function generateSelfSigned(certsDir) {
           { type: 2, value: '*.localhost' },
           { type: 7, ip: '127.0.0.1' },
           { type: 7, ip: '::1' },
+          ...getLanIPv4().map(ip => ({ type: 7, ip })),
         ],
       },
     ],
@@ -189,6 +210,18 @@ export function ensureCerts(dataDir) {
   const certPath  = path.join(certsDir, 'cert.pem')
   const keyPath   = path.join(certsDir, 'key.pem')
   const markerPath = path.join(certsDir, '.method')
+
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    const cachedCert = fs.readFileSync(certPath, 'utf-8')
+    if (!certificateCoversLan(cachedCert)) {
+      log.warn('certificado antigo não cobre o IP da rede local; gerando um novo')
+      try { fs.copyFileSync(certPath, path.join(certsDir, 'cert.previous.pem')) } catch {}
+      try { fs.copyFileSync(keyPath, path.join(certsDir, 'key.previous.pem')) } catch {}
+      try { fs.unlinkSync(certPath) } catch {}
+      try { fs.unlinkSync(keyPath) } catch {}
+      try { fs.unlinkSync(markerPath) } catch {}
+    }
+  }
 
   if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
     const cert = fs.readFileSync(certPath, 'utf-8')
